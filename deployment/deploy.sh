@@ -13,6 +13,11 @@
 
 set -euo pipefail
 
+# Every gcloud call must be non-interactive: this script runs from CI, from a
+# background shell, and over nohup, where a prompt is an abort. Equivalent to
+# passing --quiet everywhere (accept the default for all prompts).
+export CLOUDSDK_CORE_DISABLE_PROMPTS=1
+
 # --- Configuration ---------------------------------------------------------
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
@@ -45,6 +50,20 @@ say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
+# Sourcing .env to pick up GEMINI_API_KEY also exports the LOCAL DATABASE_URL and
+# REDIS_URL, which point at localhost. Cloud Run cannot reach those, and a
+# localhost REDIS_URL would silently take the "external Redis" branch and deploy
+# a service that can never connect. Refuse instead.
+for _local in DATABASE_URL REDIS_URL; do
+  eval "_value=\${${_local}:-}"
+  case "${_value}" in
+    *localhost*|*127.0.0.1*|*host.docker.internal*)
+      die "${_local} points at ${_value} — that is your local stack, not something Cloud Run can reach.
+    Unset it before deploying:  unset ${_local}
+    Or pass a real one:         ${_local}='...' ./deployment/deploy.sh" ;;
+  esac
+done
+
 say "Project ${PROJECT_ID} / region ${REGION}"
 gcloud config set project "${PROJECT_ID}" >/dev/null
 
@@ -58,9 +77,16 @@ gcloud services enable \
   vpcaccess.googleapis.com \
   secretmanager.googleapis.com \
   cloudscheduler.googleapis.com \
-  artifactregistry.googleapis.com
+  artifactregistry.googleapis.com \
+  sql-component.googleapis.com
 
 # --- 2. Secrets ------------------------------------------------------------
+# Cloud Run's *runtime* service account reads the mounted secrets — not the
+# account running this script. Without an explicit grant the revision fails with
+# "Permission denied on secret ... for Revision service account".
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+RUNTIME_SA="${RUNTIME_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+
 create_secret() {
   local name="$1" value="$2"
   if gcloud secrets describe "${name}" >/dev/null 2>&1; then
@@ -69,6 +95,12 @@ create_secret() {
     gcloud secrets create "${name}" --replication-policy=automatic >/dev/null
   fi
   printf '%s' "${value}" | gcloud secrets versions add "${name}" --data-file=- >/dev/null
+
+  # Bound per-secret rather than project-wide: the service only ever needs to
+  # read the handful of secrets it is actually given. Idempotent.
+  gcloud secrets add-iam-policy-binding "${name}" \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role=roles/secretmanager.secretAccessor >/dev/null
 }
 
 say "Storing secrets in Secret Manager"
@@ -190,6 +222,16 @@ else
   ENV_VARS+=",REDIS_URL="
 fi
 
+# `run deploy --source` offers to create this repo interactively; with prompts
+# disabled that offer would be declined and the deploy would fail.
+if ! gcloud artifacts repositories describe cloud-run-source-deploy \
+      --location="${REGION}" >/dev/null 2>&1; then
+  say "Creating the Artifact Registry repo for source builds"
+  gcloud artifacts repositories create cloud-run-source-deploy \
+    --repository-format=docker --location="${REGION}" \
+    --description="Cloud Run source deployments"
+fi
+
 say "Building and deploying ${SERVICE}"
 
 # Empty-array expansion below uses the ${arr[@]+...} form deliberately: macOS
@@ -224,13 +266,16 @@ schedule_job() {
     --time-zone="${TIMEZONE}"
     --uri="${SERVICE_URL}${path}"
     --http-method=POST
-    --headers="X-Task-Token=${TASK_TOKEN}"
     --attempt-deadline=120s
   )
+  # `create` takes --headers; `update` only accepts --update-headers. Using the
+  # wrong one fails every re-run of this otherwise idempotent script.
   if gcloud scheduler jobs describe "${name}" --location="${REGION}" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "${name}" "${args[@]}"
+    gcloud scheduler jobs update http "${name}" "${args[@]}" \
+      --update-headers="X-Task-Token=${TASK_TOKEN}"
   else
-    gcloud scheduler jobs create http "${name}" "${args[@]}"
+    gcloud scheduler jobs create http "${name}" "${args[@]}" \
+      --headers="X-Task-Token=${TASK_TOKEN}"
   fi
 }
 

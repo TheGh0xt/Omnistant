@@ -124,14 +124,35 @@ def require_task_token(x_task_token: str | None = Header(default=None)) -> None:
 @app.get("/health")
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
-    """Liveness + dependency status. Cloud Run's health check hits this."""
-    store_ok = await get_store().healthy()
-    cache_ok = await get_cache().healthy()
+    """Liveness + dependency status. Cloud Run's health check hits this.
+
+    Reports the backend actually in use, not just whether it answered. An
+    in-process fallback always answers "healthy", so reporting a bare "up" would
+    tell an operator that Redis is running when nothing was ever provisioned.
+    """
+    store = get_store()
+    cache = get_cache()
+    store_ok = await store.healthy()
+    cache_ok = await cache.healthy()
+
+    def state(healthy: bool, kind: str, real: str) -> str:
+        if not healthy:
+            return "down"
+        return "up" if kind == real else f"fallback ({kind})"
+
+    postgres = state(store_ok, store.kind, "postgres")
+    redis = state(cache_ok, cache.kind, "redis")
+    # A fallback is not a failure, but it is not full health either: nothing
+    # written to an in-memory store survives the next cold start.
+    degraded = not (store_ok and cache_ok) or "fallback" in postgres
+
     return {
-        "status": "ok" if store_ok and cache_ok else "degraded",
-        "postgres": "up" if store_ok else "down",
-        "redis": "up" if cache_ok else "down",
+        "status": "degraded" if degraded else "ok",
+        "postgres": postgres,
+        "redis": redis,
+        "sessions": get_engine().session_backend,
         "gemini": "configured" if cfg.genai_available else "missing credentials",
+        "notifications": "slack" if cfg.slack_webhook_url else "none",
         "model": cfg.model,
         "timezone": str(tz()),
     }
