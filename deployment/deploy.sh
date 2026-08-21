@@ -41,7 +41,9 @@ if [[ -z "${GEMINI_API_KEY:-}" ]]; then
   exit 1
 fi
 
-say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
+die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
 say "Project ${PROJECT_ID} / region ${REGION}"
 gcloud config set project "${PROJECT_ID}" >/dev/null
@@ -170,6 +172,16 @@ SECRETS+=",TASK_TOKEN=omnistant-task-token:latest"
 SECRETS+=",DATABASE_URL=omnistant-database-url:latest"
 
 ENV_VARS="GEMINI_MODEL=${GEMINI_MODEL},TIMEZONE=${TIMEZONE},LOG_LEVEL=INFO"
+
+# Where the scheduled jobs deliver their results. A webhook URL is itself the
+# credential — anyone holding it can post to the channel — so it is a secret.
+if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+  create_secret omnistant-slack-webhook "${SLACK_WEBHOOK_URL}"
+  SECRETS+=",SLACK_WEBHOOK_URL=omnistant-slack-webhook:latest"
+  say "Slack notifications enabled"
+else
+  warn "SLACK_WEBHOOK_URL not set — the scheduled jobs will run but tell nobody"
+fi
 if [[ -n "${REDIS_URL}" ]]; then
   create_secret omnistant-redis-url "${REDIS_URL}"
   SECRETS+=",REDIS_URL=omnistant-redis-url:latest"

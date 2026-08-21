@@ -90,6 +90,7 @@ tier's direct connection limit is low.
 | Cloud Run service | `personal-context-agent` | the app |
 | Cloud SQL (PG 16) | `omnistant-pg`, `db-f1-micro`, **ENTERPRISE edition** | the observation log |
 | Secrets | `gemini-api-key`, `omnistant-task-token`, `omnistant-database-url`, `omnistant-db-password` | credentials |
+| Secret | `omnistant-slack-webhook` — only if `SLACK_WEBHOOK_URL` is set | where the jobs deliver |
 | Scheduler job | `omnistant-morning-brief`, weekdays 08:00 | unprompted pre-departure check |
 | Scheduler job | `omnistant-evening-recap`, daily 21:00 | unprompted day recap |
 | Memorystore Redis | `omnistant-cache`, 1GB — **only with `USE_MEMORYSTORE=1`** | session state, camera frames |
@@ -174,6 +175,42 @@ To rotate any of them, add a new secret version and redeploy:
 ```bash
 printf '%s' 'new-value' | gcloud secrets versions add omnistant-database-url --data-file=-
 gcloud run services update personal-context-agent --region=us-central1
+```
+
+---
+
+## Notifications
+
+The scheduled jobs compute a result whether or not anyone is listening. To have
+that result actually reach you, set a Slack incoming webhook:
+
+1. <https://api.slack.com/apps> → **Create New App** → From scratch.
+2. **Incoming Webhooks** → toggle on → **Add New Webhook to Workspace**.
+3. Pick a channel; copy the `https://hooks.slack.com/services/...` URL.
+
+```bash
+export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/T000/B000/xxxx'
+./deployment/deploy.sh
+```
+
+The URL *is* the credential — anyone holding it can post to that channel — so the
+script stores it in Secret Manager rather than passing it as an env var.
+
+Some workspaces require admin approval to install an app. If yours does and you
+cannot get it, the notifier is a one-class seam (`utils/notify.py`): a Telegram
+or email implementation is roughly twenty lines and nothing in the workflows
+changes.
+
+Delivery is best-effort by design. If Slack is unreachable or the webhook has
+been revoked, the job logs the failure, returns `"delivered": false`, and still
+completes with its result intact — a missed notification must never take down
+the run that produced it.
+
+Test it without waiting for 08:00:
+
+```bash
+TOKEN=$(gcloud secrets versions access latest --secret=omnistant-task-token)
+curl -s -X POST "$URL/api/tasks/morning-brief" -H "X-Task-Token: $TOKEN" | jq '.delivered, .message'
 ```
 
 ---

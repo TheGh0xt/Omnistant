@@ -45,9 +45,18 @@ thin, the agent says the log is thin.
 
 ## What makes it an agent, not a chat box
 
-- **It acts unprompted.** Cloud Scheduler hits `/api/tasks/morning-brief` before
-  your usual departure time and `/api/tasks/evening-recap` at night. Nobody asks
-  it to; it runs and reports.
+- **It acts unprompted, and the result reaches you.** Cloud Scheduler hits
+  `/api/tasks/morning-brief` before your usual departure time and
+  `/api/tasks/evening-recap` at night. Nobody asks it to — it runs, works out
+  what it cannot vouch for, and posts to Slack:
+
+  > ⚠️ **Before you leave for work**
+  > Before you head to work: I can't currently vouch for your phone, wallet, keys, laptop, badge.
+
+  Set `SLACK_WEBHOOK_URL` to enable it. Without it the jobs still run and still
+  reach the right conclusion — they just tell nobody, which rather defeats the
+  point. Delivery is best-effort: if Slack is down the job logs it, reports
+  `"delivered": false`, and completes anyway.
 - **It learns.** Carry something on most of your recent trips and it gets
   promoted into that destination's routine automatically
   (`_refine_routine`). The second week is better than the first.
@@ -328,6 +337,7 @@ src/
 │   └── vision.py      Gemini vision: frame → structured item list
 ├── utils/
 │   ├── db.py          Postgres event log (+ in-memory fallback)
+│   ├── notify.py      outbound channel for the autonomous jobs (Slack)
 │   ├── cache.py       Redis session state (+ in-process fallback)
 │   ├── config.py      env-driven config
 │   ├── errors.py      quota errors → HTTP 429
@@ -354,7 +364,7 @@ src/
 ## Tests
 
 ```bash
-uv run pytest -q          # 71 tests, ~0.5s
+uv run pytest -q          # 83 tests, ~0.6s
 ```
 
 The suite is hermetic: no Postgres, no Redis, no API key, no network. Credentials
