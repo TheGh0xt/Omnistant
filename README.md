@@ -59,6 +59,25 @@ thin, the agent says the log is thin.
 
 ---
 
+## Conversation memory
+
+Sessions are stored in Postgres through ADK's `DatabaseSessionService`, so a
+conversation survives a restart and survives being routed to a different
+instance. ADK's default `InMemorySessionService` keeps the whole conversation in
+one process's RAM: a restart erases it, and on more than one instance turn two
+can land somewhere that has never heard of turn one.
+
+```bash
+uv run python scripts/verify_session_durability.py
+# session backend: postgres
+# PASS: conversation history survives a fresh process.
+```
+
+Without `DATABASE_URL` it falls back to in-memory and says which backend it
+settled on in the logs (`"sessions": "in-memory"`).
+
+---
+
 ## Architecture
 
 ```
@@ -175,8 +194,24 @@ your routine. *Flip* switches between front and rear cameras on a phone.
 
 **Say something.** Three tap-to-send chips for the three workflows, a text box,
 and a microphone. The mic is push-to-talk: tap once to start, it stops on its own
-when you finish speaking. Typing always works, so a browser without speech
-recognition is never a dead end.
+when you finish speaking, and tapping again cancels. Typing always works, so a
+browser without speech recognition is never a dead end.
+
+Voice input is fussier than it looks, and three things are deliberate:
+
+- **Tapping the mic cancels any reply being spoken.** Synthesis and recognition
+  compete for the audio device: starting the mic while the page is talking ends
+  recognition instantly, with no error. That is the exact shape of a real
+  conversation — it answers, you reply — so it has to be handled.
+- **Microphone permission is requested up front** with `getUserMedia`, rather
+  than letting the recogniser fail vaguely later. You get the browser's own
+  prompt and, if you decline, a specific reason.
+- **Brief silence does not end the turn.** Chrome stops listening after about a
+  second of quiet; we restart it while you still intend to speak, up to a 20
+  second ceiling.
+
+Anything that does go wrong appears **in the transcript**, not as small grey
+text — a mic that silently does nothing is the worst possible feedback.
 
 **Conversation.** The agent's reply, plus the machinery behind it: the recognised
 intent, which tools it called (`find_item()`, `check_before_leaving()`), and the
@@ -319,12 +354,15 @@ src/
 ## Tests
 
 ```bash
-uv run pytest -q          # 60 tests, ~0.4s
+uv run pytest -q          # 71 tests, ~0.5s
 ```
 
 The suite is hermetic: no Postgres, no Redis, no API key, no network. Credentials
 are blanked in `conftest.py` before config loads, so every Gemini call takes the
 deterministic stub path.
+
+`tests/test_sessions.py` covers session-backend selection and its fallbacks; the end-to-end
+durability proof needs a real database and lives in `scripts/verify_session_durability.py`.
 
 `tests/test_regressions.py` covers three bugs found while building this, each
 with the failure it actually produced:

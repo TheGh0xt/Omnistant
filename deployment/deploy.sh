@@ -25,10 +25,10 @@ DB_USER="${DB_USER:-omnistant}"
 REDIS_INSTANCE="${REDIS_INSTANCE:-omnistant-cache}"
 VPC_CONNECTOR="${VPC_CONNECTOR:-omnistant-vpc}"
 TIMEZONE="${TIMEZONE:-Europe/London}"
-# ADK's session service is in-process, so a second turn routed to a different
-# instance loses the conversation. One instance keeps multi-turn coherent; raise
-# this only once sessions are backed by something shared.
-MAX_INSTANCES="${MAX_INSTANCES:-1}"
+# Safe above 1 because sessions are Postgres-backed (see build_session_service):
+# a turn routed to any instance finds the same conversation. With the in-process
+# session service this had to be 1, or turn two would forget turn one.
+MAX_INSTANCES="${MAX_INSTANCES:-4}"
 GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
 
 if [[ -z "${PROJECT_ID}" ]]; then

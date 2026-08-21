@@ -120,21 +120,40 @@ idempotent.
 
 ---
 
-## Why `--max-instances=1`
+## Conversation durability
 
-ADK's session service is in-process. A second conversational turn routed to a
-different Cloud Run instance would not find the session and would lose the
-thread. One instance keeps multi-turn coherent; `--concurrency=40` means that
-single instance still serves plenty of simultaneous requests.
+Sessions are **Postgres-backed** via ADK's `DatabaseSessionService`, pointed at
+the same database as the observation log. That means a conversation survives:
 
-Raise `MAX_INSTANCES` only once sessions are backed by something shared — that
-means swapping `InMemorySessionService` for ADK's `DatabaseSessionService`
-(pointing at the same Postgres), not just adding Redis, since Redis only holds
-*our* session document and not ADK's.
+- a restart or a new revision, and
+- being routed to a different Cloud Run instance mid-conversation.
+
+With ADK's default `InMemorySessionService` neither held: the entire
+conversation lived in one process's RAM, so a restart erased it and turn two
+landing on another instance found nothing. That is why `--max-instances` is now
+**4** rather than 1 — the earlier limit was a workaround for exactly this.
+
+Verify it against your own database:
 
 ```bash
-MAX_INSTANCES=4 ./deployment/deploy.sh
+uv run python scripts/verify_session_durability.py
+# session backend: postgres
+# ...
+# PASS: conversation history survives a fresh process.
 ```
+
+If `DATABASE_URL` is unset, or the session tables cannot be created, the service
+logs a warning and falls back to in-memory rather than refusing to boot. Check
+which backend is live:
+
+```bash
+gcloud run services logs read personal-context-agent --region=us-central1 \
+  | grep "agent engine ready"
+# ... "sessions": "postgres"
+```
+
+ADK creates its own tables (`sessions`, `events`, `app_states`, `user_states`,
+`adk_internal_metadata`) alongside ours on first run. No migration step needed.
 
 ---
 

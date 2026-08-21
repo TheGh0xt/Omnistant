@@ -130,16 +130,26 @@
         els.micBtn.classList.toggle('listening', listening);
         els.listenHint.textContent = listening ? 'listening…' : '';
       },
-      onError: function (message) { els.listenHint.textContent = message; }
+      /* Voice failures used to show only as small grey hint text, which reads
+         as the button silently doing nothing. Put them in the transcript where
+         the user is already looking. */
+      onError: function (message) {
+        els.listenHint.textContent = '';
+        addMessage('agent', message, { error: true });
+      }
     });
     if (!listener.isSupported()) { return null; }
-    els.micBtn.addEventListener('click', function () { Speaker.unlock(); listener.toggle(); });
+    // Deliberately NOT Speaker.unlock() here: unlocking speaks a silent
+    // utterance, and synthesis starting alongside recognition kills the mic.
+    // Unlock happens on the send/suggestion gestures instead.
+    els.micBtn.addEventListener('click', function () { listener.toggle(); });
     return listener;
   }
 
   /* ---------------- sending ---------------- */
   els.composer.addEventListener('submit', function (event) {
     event.preventDefault();
+    Speaker.unlock();
     send(els.input.value);
   });
 

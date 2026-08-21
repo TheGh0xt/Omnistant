@@ -68,7 +68,7 @@ opinion becomes a stored fact.
 
 | | PostgreSQL | Redis |
 |---|---|---|
-| **Holds** | observations, routines, leave scans | session state, camera frames, last-seen index |
+| **Holds** | observations, routines, leave scans, **ADK conversation sessions** | session state, camera frames, last-seen index |
 | **Lifetime** | forever, append-only | TTL (24h sessions, 15min frames) |
 | **Loss is** | unacceptable | fine |
 | **Read by** | every workflow | the hot path, to avoid a round trip |
@@ -166,6 +166,7 @@ to act — which is the actual test of whether the autonomy is real or a demo pr
 | Timeline narration fails | falls back to a deterministic list of the day's events |
 | Intent classification fails | falls back to the rules result |
 | Postgres/Redis unset | in-memory fallback; `/healthz` reports `degraded` |
+| Session store unreachable | falls back to in-memory sessions; logs the backend it settled on |
 | No Gemini credentials | rules-based routing straight to workflows; `degraded: true` on the reply |
 
 The pattern throughout: **degrade to something honest, never to something
