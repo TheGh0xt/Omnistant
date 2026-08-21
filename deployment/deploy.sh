@@ -18,11 +18,17 @@ PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-personal-context-agent}"
 SQL_INSTANCE="${SQL_INSTANCE:-omnistant-pg}"
+# Shared-core, ENTERPRISE edition. db-g1-small if f1-micro feels tight.
+SQL_TIER="${SQL_TIER:-db-f1-micro}"
 DB_NAME="${DB_NAME:-omnistant}"
 DB_USER="${DB_USER:-omnistant}"
 REDIS_INSTANCE="${REDIS_INSTANCE:-omnistant-cache}"
 VPC_CONNECTOR="${VPC_CONNECTOR:-omnistant-vpc}"
 TIMEZONE="${TIMEZONE:-Europe/London}"
+# ADK's session service is in-process, so a second turn routed to a different
+# instance loses the conversation. One instance keeps multi-turn coherent; raise
+# this only once sessions are backed by something shared.
+MAX_INSTANCES="${MAX_INSTANCES:-1}"
 GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
 
 if [[ -z "${PROJECT_ID}" ]]; then
@@ -71,35 +77,66 @@ create_secret omnistant-db-password "${DB_PASSWORD}"
 create_secret omnistant-task-token "${TASK_TOKEN}"
 
 # --- 3. Cloud SQL (PostgreSQL) --------------------------------------------
-if gcloud sql instances describe "${SQL_INSTANCE}" >/dev/null 2>&1; then
-  say "Cloud SQL instance ${SQL_INSTANCE} already exists"
+# SKIP_CLOUD_SQL=1 with an external DATABASE_URL (Supabase, Neon, self-hosted)
+# avoids the only recurring cost in the default setup. The schema is applied by
+# the app at startup against whatever DATABASE_URL points at, so nothing else
+# changes.
+if [[ "${SKIP_CLOUD_SQL:-0}" == "1" ]]; then
+  [[ -n "${DATABASE_URL:-}" ]] || die "SKIP_CLOUD_SQL=1 requires DATABASE_URL to be set"
+  say "Skipping Cloud SQL — using the external DATABASE_URL you provided"
+  SQL_FLAGS=()
 else
-  say "Creating Cloud SQL instance ${SQL_INSTANCE} (this takes ~10 minutes)"
-  gcloud sql instances create "${SQL_INSTANCE}" \
-    --database-version=POSTGRES_16 \
-    --tier=db-f1-micro \
-    --region="${REGION}" \
-    --storage-size=10GB \
-    --storage-auto-increase
+  if gcloud sql instances describe "${SQL_INSTANCE}" >/dev/null 2>&1; then
+    say "Cloud SQL instance ${SQL_INSTANCE} already exists"
+  else
+    say "Creating Cloud SQL instance ${SQL_INSTANCE} (this takes ~10 minutes)"
+    # --edition is required: new projects default to ENTERPRISE_PLUS, which
+    # rejects shared-core tiers like db-f1-micro with
+    #   "Invalid Tier (db-f1-micro) for (ENTERPRISE_PLUS) Edition".
+    # ENTERPRISE is the cheaper edition and the only one offering db-f1-micro.
+    gcloud sql instances create "${SQL_INSTANCE}" \
+      --database-version=POSTGRES_16 \
+      --edition=ENTERPRISE \
+      --tier="${SQL_TIER}" \
+      --region="${REGION}" \
+      --storage-size=10GB \
+      --storage-auto-increase
+  fi
+
+  gcloud sql databases describe "${DB_NAME}" --instance="${SQL_INSTANCE}" >/dev/null 2>&1 \
+    || gcloud sql databases create "${DB_NAME}" --instance="${SQL_INSTANCE}"
+
+  if gcloud sql users list --instance="${SQL_INSTANCE}" --format='value(name)' | grep -qx "${DB_USER}"; then
+    gcloud sql users set-password "${DB_USER}" --instance="${SQL_INSTANCE}" --password="${DB_PASSWORD}"
+  else
+    gcloud sql users create "${DB_USER}" --instance="${SQL_INSTANCE}" --password="${DB_PASSWORD}"
+  fi
+
+  SQL_CONNECTION="${PROJECT_ID}:${REGION}:${SQL_INSTANCE}"
+  SQL_FLAGS=(--add-cloudsql-instances="${SQL_CONNECTION}")
+  DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@/${DB_NAME}?host=/cloudsql/${SQL_CONNECTION}"
 fi
 
-gcloud sql databases describe "${DB_NAME}" --instance="${SQL_INSTANCE}" >/dev/null 2>&1 \
-  || gcloud sql databases create "${DB_NAME}" --instance="${SQL_INSTANCE}"
-
-if gcloud sql users list --instance="${SQL_INSTANCE}" --format='value(name)' | grep -qx "${DB_USER}"; then
-  gcloud sql users set-password "${DB_USER}" --instance="${SQL_INSTANCE}" --password="${DB_PASSWORD}"
-else
-  gcloud sql users create "${DB_USER}" --instance="${SQL_INSTANCE}" --password="${DB_PASSWORD}"
-fi
-
-SQL_CONNECTION="${PROJECT_ID}:${REGION}:${SQL_INSTANCE}"
-
-# --- 4. Memorystore (Redis) + VPC connector -------------------------------
-# Cloud Run reaches Memorystore over a private IP, which needs a Serverless VPC
-# connector. This is the slowest and most failure-prone part of the setup, so
-# REDIS_OPTIONAL=1 skips it — the service falls back to an in-process cache.
-if [[ "${REDIS_OPTIONAL:-0}" == "1" ]]; then
-  say "Skipping Memorystore (REDIS_OPTIONAL=1); using in-process cache"
+# --- 4. Redis --------------------------------------------------------------
+# Three options, cheapest first. The default is NO managed Redis, because at
+# demo scale it buys almost nothing here:
+#
+#   * The browser sends the camera frame *with* the chat turn, so frames never
+#     need to round-trip through a shared cache.
+#   * ADK's session service is in-process regardless, so conversation history
+#     does not survive an instance change whether Redis exists or not.
+#
+#   (default)              in-process cache.            $0
+#   REDIS_URL=rediss://…   external, e.g. Upstash.      $0 on a free tier
+#                          Public TLS endpoint, so no VPC connector is needed.
+#   USE_MEMORYSTORE=1      Memorystore + VPC connector. ~$44/month
+#
+if [[ -n "${REDIS_URL:-}" ]]; then
+  say "Using the external REDIS_URL you provided (no VPC connector needed)"
+  VPC_FLAGS=()
+elif [[ "${USE_MEMORYSTORE:-0}" != "1" ]]; then
+  say "No managed Redis (set USE_MEMORYSTORE=1 or REDIS_URL to change this)"
+  echo "    Session state and camera frames will use an in-process cache."
   REDIS_URL=""
   VPC_FLAGS=()
 else
@@ -122,24 +159,44 @@ else
 fi
 
 # --- 5. Build & deploy -----------------------------------------------------
-say "Building and deploying ${SERVICE}"
-DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@/${DB_NAME}?host=/cloudsql/${SQL_CONNECTION}"
+# Connection strings carry credentials — the DB password, and the token embedded
+# in a hosted Redis URL. Passing them via --set-env-vars would expose them in
+# `gcloud run services describe`, the Cloud Console, and every revision's
+# history. They go through Secret Manager instead; only non-sensitive settings
+# travel as plain env vars.
+create_secret omnistant-database-url "${DATABASE_URL}"
+SECRETS="GEMINI_API_KEY=gemini-api-key:latest"
+SECRETS+=",TASK_TOKEN=omnistant-task-token:latest"
+SECRETS+=",DATABASE_URL=omnistant-database-url:latest"
 
+ENV_VARS="GEMINI_MODEL=${GEMINI_MODEL},TIMEZONE=${TIMEZONE},LOG_LEVEL=INFO"
+if [[ -n "${REDIS_URL}" ]]; then
+  create_secret omnistant-redis-url "${REDIS_URL}"
+  SECRETS+=",REDIS_URL=omnistant-redis-url:latest"
+else
+  # Empty means "no Redis" — an empty value cannot be a secret payload.
+  ENV_VARS+=",REDIS_URL="
+fi
+
+say "Building and deploying ${SERVICE}"
+
+# Empty-array expansion below uses the ${arr[@]+...} form deliberately: macOS
+# still ships bash 3.2, where "${arr[@]}" on an empty array trips `set -u`.
 gcloud run deploy "${SERVICE}" \
   --source . \
   --region="${REGION}" \
   --platform=managed \
   --allow-unauthenticated \
-  --add-cloudsql-instances="${SQL_CONNECTION}" \
-  "${VPC_FLAGS[@]}" \
-  --set-env-vars="DATABASE_URL=${DATABASE_URL},REDIS_URL=${REDIS_URL},GEMINI_MODEL=${GEMINI_MODEL},TIMEZONE=${TIMEZONE},LOG_LEVEL=INFO" \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest,TASK_TOKEN=omnistant-task-token:latest" \
+  ${SQL_FLAGS[@]+"${SQL_FLAGS[@]}"} \
+  ${VPC_FLAGS[@]+"${VPC_FLAGS[@]}"} \
+  --set-env-vars="${ENV_VARS}" \
+  --set-secrets="${SECRETS}" \
   --memory=1Gi \
   --cpu=1 \
   --timeout=120 \
   --concurrency=40 \
   --min-instances=0 \
-  --max-instances=4
+  --max-instances="${MAX_INSTANCES}"
 
 SERVICE_URL=$(gcloud run services describe "${SERVICE}" --region="${REGION}" --format='value(status.url)')
 
