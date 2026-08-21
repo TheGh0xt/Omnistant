@@ -1,0 +1,43 @@
+# Local development stack: the two managed services Cloud Run would talk to.
+# In production these are Cloud SQL (PostgreSQL) and Memorystore (Redis).
+#
+# No credentials are hardcoded here. POSTGRES_PASSWORD is required and comes
+# from the gitignored .env that Compose loads automatically — `docker compose up`
+# fails with the message below rather than silently falling back to a default
+# that would end up committed. Generate one with:
+#
+#     openssl rand -hex 24
+#
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # User and database names are not secrets; the password is.
+      POSTGRES_USER: ${POSTGRES_USER:-omnistant}
+      POSTGRES_DB: ${POSTGRES_DB:-omnistant}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — see .env.example, generate with openssl rand -hex 24}"
+    ports:
+      # Non-default host ports so this does not collide with a local Postgres.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Applied automatically on first boot of an empty volume.
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omnistant} -d ${POSTGRES_DB:-omnistant}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

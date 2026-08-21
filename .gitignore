@@ -1,0 +1,21 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*-key.json
+service-account*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Local data / artifacts ---
+demo_data/*.local.json
+*.log
+.DS_Store
