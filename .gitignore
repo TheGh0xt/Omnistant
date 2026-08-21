@@ -19,3 +19,4 @@ venv/
 demo_data/*.local.json
 *.log
 .DS_Store
+.seeded

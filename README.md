@@ -107,46 +107,114 @@ Full diagram: [`docs/architecture.md`](docs/architecture.md).
 **Requirements:** Python 3.14, Docker (for Postgres + Redis), and a Gemini API
 key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 
+### One command
+
 ```bash
-# 1. Dependencies
-uv sync                      # or: pip install -r requirements.txt
+./run.sh
+```
 
-# 2. Configuration
-cp .env.example .env
+That brings up Postgres and Redis, waits for them, applies the schema, seeds the
+routines on first run, starts the server, and **opens <http://localhost:8080> in
+your browser**.
 
-# 3. Fill in two values in .env:
-#      GEMINI_API_KEY     — from https://aistudio.google.com/apikey
-#      POSTGRES_PASSWORD  — any local value; generate one with:
-openssl rand -hex 24
+On the very first run it creates `.env` for you with a generated
+`POSTGRES_PASSWORD`, then stops and asks for your Gemini API key. Paste it into
+`.env` as `GEMINI_API_KEY=...` and run `./run.sh` again.
 
-# 4. Postgres + Redis (schema is applied automatically on first boot)
-docker compose up -d
+Set `NO_OPEN=1` if you would rather it not launch a browser.
 
-# 5. Seed the learned routines
+### Or step by step
+
+```bash
+uv sync                                    # dependencies
+cp .env.example .env                       # configuration
+
+# Fill in two values in .env:
+#   GEMINI_API_KEY     — https://aistudio.google.com/apikey
+#   POSTGRES_PASSWORD  — generate with: openssl rand -hex 24
+
+docker compose up -d                       # Postgres + Redis
 uv run python scripts/seed_demo.py --routines
-
-# 6. Run
 PYTHONPATH=src uv run uvicorn main:app --reload --port 8080
 ```
+
+Then open **<http://localhost:8080>**.
 
 `POSTGRES_PASSWORD` has **no default anywhere** — `docker compose up` refuses to
 start without it rather than falling back to a value that would end up committed.
 It is defined once in the gitignored `.env`, and `DATABASE_URL` is interpolated
 from it, so the credential lives in exactly one place.
 
-Open <http://localhost:8080>. Camera and microphone need a secure context —
-`localhost` counts, a bare LAN IP does not. To demo on a phone, deploy to Cloud
-Run (below) and open the HTTPS URL.
-
 ### Check it's healthy
 
 ```bash
-curl -s localhost:8080/healthz
+curl -s localhost:8080/health
 # {"status":"ok","postgres":"up","redis":"up","gemini":"configured", ...}
 ```
 
+Both `/health` and `/healthz` work. (`/healthz` is the Google convention — from
+Borg, then Kubernetes — where the trailing `z` keeps a probe endpoint from
+colliding with an app's own `/health` route. It is what the Dockerfile's
+`HEALTHCHECK` uses. `/health` is there because that is what a person types.)
+
 `status: degraded` means Postgres or Redis is unreachable. The service still
 runs — it falls back to in-memory storage — but nothing survives a restart.
+
+---
+
+## Using the interface
+
+<img src="docs/images/ui-conversation.png" alt="The agent answering a recall question, showing decayed confidence and the observation log" width="380">
+
+Four sections, top to bottom:
+
+**Camera.** Off until you press *Start camera*. Once live, any message that
+sounds like leaving ("I'm off to work", "heading out") automatically grabs a
+still and sends it with the turn — that frame is what the agent compares against
+your routine. *Flip* switches between front and rear cameras on a phone.
+
+**Say something.** Three tap-to-send chips for the three workflows, a text box,
+and a microphone. The mic is push-to-talk: tap once to start, it stops on its own
+when you finish speaking. Typing always works, so a browser without speech
+recognition is never a dead end.
+
+**Conversation.** The agent's reply, plus the machinery behind it: the recognised
+intent, which tools it called (`find_item()`, `check_before_leaving()`), and the
+structured result — found items in green, missing in red, and every sighting with
+its confidence. *Speak replies* reads answers aloud; turn it off for a quiet room.
+
+**What it knows.** The agent's live memory. *Observations* is the event log,
+newest first, with how each fact was verified and how much it is currently
+trusted. *Routines* is what it has learned you take where, and over how many
+trips.
+
+The screenshot above shows the honesty behaviour that matters most: the AirPods
+were last seen at 8:31 AM, that sighting has decayed to **0.33**, and rather than
+asserting a location the agent says it *wouldn't rely on it*.
+
+### Trying it in 60 seconds
+
+1. `./run.sh`, wait for the browser.
+2. Type **"I left my keys on the hall table"** → it records the observation.
+3. Type **"Where are my keys?"** → it answers from the log, with confidence.
+4. Press *Start camera*, point it at your desk, say **"I'm going to work"** → it
+   scans the frame and tells you what's missing from your work routine.
+5. Type **"What did I do today?"** → it reconstructs the day.
+
+Steps 2, 3 and 5 cost no camera access at all, so you can try the whole thing
+before granting any permissions.
+
+### A note on what gets stored
+
+Camera frames themselves are held in Redis for 15 minutes and never written to
+disk. What *is* stored permanently is what Gemini saw in them — item names,
+locations and timestamps in the `observations` table.
+
+That is the point of the app, but it means the log is a record of your
+belongings and movements. It lives in your own Postgres. Treat any screenshot of
+the *Observations* panel the way you would treat a photo of your desk, and note
+that the Cloud Run deployment is `--allow-unauthenticated` by default — see the
+security section of [DEPLOYMENT.md](DEPLOYMENT.md) before putting real data in it.
 
 ---
 

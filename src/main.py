@@ -115,6 +115,11 @@ def require_task_token(x_task_token: str | None = Header(default=None)) -> None:
 # ---------------------------------------------------------------------------
 # Health & meta
 # ---------------------------------------------------------------------------
+# Both spellings are served. `/healthz` is the Google convention (Borg, then
+# Kubernetes; the trailing `z` exists so a probe endpoint cannot collide with an
+# app's own `/health` route) and is what the Dockerfile HEALTHCHECK uses.
+# `/health` is what a person types. Neither should 404.
+@app.get("/health")
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
     """Liveness + dependency status. Cloud Run's health check hits this."""
