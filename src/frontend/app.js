@@ -1,374 +1,445 @@
-/* App wiring: camera + voice + agent API.
+/* Omnistant — app wiring.
  *
- * The one piece of real logic here is that when the user says something that
- * sounds like leaving, we attach the current camera frame to the turn. The
- * agent cannot tell you what you forgot if it cannot see what you have.
+ * The important behaviour here is the watch loop. The old build was
+ * request/response: you asked, it looked once, it forgot. This one keeps the
+ * camera open and ticks continuously, so putting your AirPods in a bag is
+ * something the agent *witnesses* rather than something you have to report.
+ *
+ * The loop is deliberately not a fixed-rate poll. Every tick compares the frame
+ * locally against the last one actually sent (Camera.hasChanged); a scene nobody
+ * has touched never reaches the network. That keeps a continuously-watching
+ * agent affordable, and it is also just correct — an unchanged frame carries no
+ * new information.
  */
 (function () {
   'use strict';
 
+  var TICK_MS = 1500;          // how often we *look* — local, free
+  var MIN_API_GAP_MS = 6000;   // floor between vision calls, even if things move
+  var DIFF_THRESHOLD = 6;      // mean luma delta that counts as "something changed"
+  var REVEAL_MS = 150;         // word-by-word reveal cadence
+
+  var el = function (id) { return document.getElementById(id); };
   var els = {
-    status: document.getElementById('status'),
-    dot: document.querySelector('.dot'),
-    video: document.getElementById('video'),
-    canvas: document.getElementById('canvas'),
-    viewportEmpty: document.getElementById('viewportEmpty'),
-    scanFlash: document.getElementById('scanFlash'),
-    cameraToggle: document.getElementById('cameraToggle'),
-    flipCamera: document.getElementById('flipCamera'),
-    cameraHint: document.getElementById('cameraHint'),
-    composer: document.getElementById('composer'),
-    input: document.getElementById('input'),
-    sendBtn: document.getElementById('sendBtn'),
-    micBtn: document.getElementById('micBtn'),
-    listenHint: document.getElementById('listenHint'),
-    transcript: document.getElementById('transcript'),
-    speakToggle: document.getElementById('speakToggle'),
-    refreshState: document.getElementById('refreshState'),
-    panels: {
-      observations: document.getElementById('panel-observations'),
-      routines: document.getElementById('panel-routines')
-    }
+    agentStatus: el('agentStatus'),
+    globe: el('globe'), globeTooltip: el('globeTooltip'), globeEmpty: el('globeEmpty'),
+    expandGlobe: el('expandGlobe'), globeDetails: el('globeDetails'), obsList: el('obsList'),
+    video: el('video'), canvas: el('canvas'),
+    viewportPlaceholder: el('viewportPlaceholder'), watchBadge: el('watchBadge'),
+    watchToggle: el('watchToggle'), flipCamera: el('flipCamera'),
+    watchState: el('watchState'), seenLine: el('seenLine'),
+    workflow: el('workflow'), workflowTitle: el('workflowTitle'), workflowSub: el('workflowSub'),
+    response: el('response'), answer: el('answer'), details: el('details'),
+    gotIt: el('gotIt'), toggleDetails: el('toggleDetails'),
+    micBtn: el('micBtn'), micHalo: el('micHalo'),
+    voiceStatus: el('voiceStatus'), voiceTranscript: el('voiceTranscript'), speakBars: el('speakBars'),
+    composer: el('composer'), input: el('input'), sendBtn: el('sendBtn')
   };
 
   var camera = new Camera(els.video, els.canvas);
-  var state = { sessionId: null, userId: null, busy: false };
+  var globe = new Globe(els.globe, els.globeTooltip, { onSelect: onGlobeSelect });
 
-  /* Utterances that should carry a camera frame. Mirrors the server-side
-     leave-detection rules; a false positive only costs one extra frame. */
-  var LEAVING = /\b(leav|head(ing)?\s*out|going to|off to|on my way|about to leave|going out)\b/i;
+  var state = {
+    sessionId: null, userId: null,
+    screen: 'home', busy: false,
+    watching: false, lastApiAt: 0, tickTimer: null, pausedUntil: 0,
+    observations: [], filter: 'all',
+    revealTimer: null, detailRows: []
+  };
 
-  /* ---------------- API ---------------- */
+  var RESTING_HINT = 'Tap to talk, or just type below.';
+
+  /* ───────── api ───────── */
   async function api(path, options) {
     var res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options));
     var body = null;
     try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
     if (!res.ok) {
-      throw new Error((body && (body.detail || body.message)) || ('Request failed (' + res.status + ')'));
+      var err = new Error((body && (body.detail || body.message)) || ('Request failed (' + res.status + ')'));
+      err.status = res.status;
+      err.retryAfter = body && body.retry_after;
+      throw err;
     }
     return body;
   }
 
-  /* ---------------- boot ---------------- */
+  function setAgentStatus(text) { els.agentStatus.textContent = text; }
+
+  /* ───────── boot ───────── */
   async function boot() {
     try {
       var cfg = await api('/api/config');
       state.sessionId = cfg.session_id;
       state.userId = cfg.user_id;
-      renderStatus(cfg.subsystems);
     } catch (err) {
-      renderStatus(null);
-      addMessage('agent', 'Could not reach the agent service: ' + err.message, { error: true });
+      say('I can’t reach my own service right now. ' + err.message);
     }
-    if (!Speaker.isSupported()) { els.speakToggle.disabled = true; els.speakToggle.checked = false; }
-    var listener = setupVoice();
-    if (!listener) { els.micBtn.disabled = true; els.micBtn.title = 'Voice input is not supported in this browser'; }
-    await refreshKnowledge();
+    if (!Speaker.isSupported()) { /* replies simply will not be spoken */ }
+    setupVoice();
+    await refreshObservations();
   }
 
-  function renderStatus(subsystems) {
-    var map = {
-      gemini: subsystems && subsystems.gemini,
-      postgres: subsystems && subsystems.postgres,
-      redis: subsystems && subsystems.redis
-    };
-    els.status.querySelectorAll('.pill').forEach(function (pill) {
-      var value = map[pill.dataset.key];
-      pill.classList.remove('ok', 'warn', 'bad');
-      if (!value) { pill.classList.add('bad'); pill.textContent = pill.dataset.key + ': ?'; return; }
-      var healthy = /live/.test(value);
-      pill.classList.add(healthy ? 'ok' : 'warn');
-      pill.textContent = pill.dataset.key + (healthy ? '' : ': fallback');
+  /* ───────── observations → globe ───────── */
+  async function refreshObservations() {
+    try {
+      var data = await api('/api/observations?hours=24&user_id=' + encodeURIComponent(state.userId || ''));
+      state.observations = (data.observations || []).map(function (o) {
+        return {
+          id: o.id, label: o.subject, place: o.location || '', time: o.time,
+          type: o.type, confidence: Math.round((o.confidence || 0) * 100),
+          detail: o.detail || ''
+        };
+      });
+      globe.setObservations(state.observations);
+      els.globeEmpty.hidden = state.observations.length > 0;
+      renderObsList();
+    } catch (err) {
+      /* The globe is a view of memory, not memory itself — never break the app. */
+      console.warn('observation refresh failed', err);
+    }
+  }
+
+  function renderObsList() {
+    els.obsList.textContent = '';
+    var rows = state.observations.filter(function (o) {
+      return state.filter === 'all' || o.type === state.filter;
     });
-    els.dot.classList.toggle('live', !!subsystems);
-  }
-
-  /* ---------------- camera ---------------- */
-  els.cameraToggle.addEventListener('click', async function () {
-    if (camera.isRunning()) {
-      camera.stop();
-      els.cameraToggle.textContent = 'Start camera';
-      els.cameraHint.textContent = 'off';
-      els.viewportEmpty.hidden = false;
-      els.flipCamera.hidden = true;
+    if (!rows.length) {
+      var p = document.createElement('p');
+      p.className = 'empty-note';
+      p.textContent = 'Nothing of that kind yet.';
+      els.obsList.appendChild(p);
       return;
     }
-    els.cameraToggle.disabled = true;
-    els.cameraHint.textContent = 'starting…';
-    try {
-      await camera.start();
-      els.cameraToggle.textContent = 'Stop camera';
-      els.cameraHint.textContent = 'live';
-      els.viewportEmpty.hidden = true;
-      els.flipCamera.hidden = false;
-    } catch (err) {
-      els.cameraHint.textContent = 'unavailable';
-      addMessage('agent', err.message, { error: true });
-    } finally {
-      els.cameraToggle.disabled = false;
-    }
+    rows.forEach(function (o) {
+      var row = document.createElement('button');
+      row.className = 'obs-row';
+      row.type = 'button';
+
+      var dot = document.createElement('span');
+      dot.className = 'obs-dot';
+      dot.style.background = Globe.TYPE_COLOR[o.type] || '#4A90E2';
+
+      var body = document.createElement('span');
+      body.className = 'obs-body';
+      var label = document.createElement('span');
+      label.className = 'obs-label';
+      label.textContent = o.label;
+      var meta = document.createElement('span');
+      meta.className = 'obs-meta';
+      // Type repeats in text: colour is never the only signal.
+      meta.textContent = [o.type, o.place, o.time].filter(Boolean).join(' · ');
+      body.appendChild(label); body.appendChild(meta);
+
+      var conf = document.createElement('span');
+      conf.className = 'obs-conf';
+      conf.textContent = o.confidence + '%';
+
+      row.appendChild(dot); row.appendChild(body); row.appendChild(conf);
+      row.addEventListener('click', function () { globe.select(o.id); });
+      els.obsList.appendChild(row);
+    });
+  }
+
+  function onGlobeSelect() { /* tooltip is drawn by the globe itself */ }
+
+  els.expandGlobe.addEventListener('click', function () {
+    var opening = els.globeDetails.hidden;
+    els.globeDetails.hidden = !opening;
+    els.workflow.hidden = opening;
+    els.expandGlobe.textContent = opening ? 'Close' : 'Expand';
+    els.expandGlobe.setAttribute('aria-expanded', String(opening));
   });
 
+  document.querySelectorAll('.pill').forEach(function (pill) {
+    pill.addEventListener('click', function () {
+      document.querySelectorAll('.pill').forEach(function (p) { p.classList.remove('selected'); });
+      pill.classList.add('selected');
+      state.filter = pill.dataset.filter;
+      globe.setFilter(state.filter);
+      renderObsList();
+    });
+  });
+
+  /* ───────── the watch loop ───────── */
+  els.watchToggle.addEventListener('click', function () {
+    if (state.watching) { stopWatching(); } else { startWatching(); }
+  });
   els.flipCamera.addEventListener('click', function () { camera.flip(); });
 
-  function captureFrame() {
-    var frame = camera.capture();
-    if (frame) {
-      els.scanFlash.classList.remove('fire');
-      void els.scanFlash.offsetWidth;   // restart the CSS animation
-      els.scanFlash.classList.add('fire');
+  async function startWatching() {
+    els.watchToggle.disabled = true;
+    els.watchState.textContent = 'starting…';
+    try {
+      await camera.start();
+    } catch (err) {
+      els.watchState.textContent = 'unavailable';
+      els.watchToggle.disabled = false;
+      say(err.message);
+      return;
     }
-    return frame;
+    state.watching = true;
+    state.lastApiAt = 0;
+    els.watchToggle.disabled = false;
+    els.watchToggle.textContent = 'Stop watching';
+    els.watchToggle.classList.add('stop');
+    els.viewportPlaceholder.hidden = true;
+    els.watchBadge.hidden = false;
+    els.flipCamera.hidden = false;
+    els.watchState.textContent = 'Watching';
+    els.watchState.classList.add('live');
+    els.seenLine.textContent = 'Looking…';
+    setAgentStatus('Watching');
+    state.tickTimer = setInterval(tick, TICK_MS);
+    tick();
   }
 
-  /* ---------------- voice ---------------- */
-  function setupVoice() {
-    var listener = new Listener({
-      onPartial: function (text) { els.input.value = text; },
-      onResult: function (text) { els.input.value = text; send(text); },
-      onStateChange: function (listening) {
-        els.micBtn.classList.toggle('listening', listening);
-        els.listenHint.textContent = listening ? 'listening…' : '';
-      },
-      /* Voice failures used to show only as small grey hint text, which reads
-         as the button silently doing nothing. Put them in the transcript where
-         the user is already looking. */
-      onError: function (message) {
-        els.listenHint.textContent = '';
-        addMessage('agent', message, { error: true });
+  function stopWatching() {
+    state.watching = false;
+    clearInterval(state.tickTimer);
+    state.tickTimer = null;
+    camera.stop();
+    els.watchToggle.textContent = 'Start watching';
+    els.watchToggle.classList.remove('stop');
+    els.viewportPlaceholder.hidden = false;
+    els.watchBadge.hidden = true;
+    els.flipCamera.hidden = true;
+    els.watchState.textContent = 'Off';
+    els.watchState.classList.remove('live');
+    els.seenLine.textContent = '';
+    setAgentStatus('Ready');
+  }
+
+  async function tick() {
+    if (!state.watching || state.busy) { return; }
+    var now = Date.now();
+    if (now < state.pausedUntil) {
+      var wait = Math.ceil((state.pausedUntil - now) / 1000);
+      els.seenLine.textContent = 'Paused — model is rate-limited (' + wait + 's)';
+      return;
+    }
+    if (now - state.lastApiAt < MIN_API_GAP_MS) { return; }
+    if (!camera.hasChanged(DIFF_THRESHOLD)) { return; }   // nothing moved; costs nothing
+
+    var frame = camera.capture();
+    if (!frame) { return; }
+    camera.commitFrame();
+    state.lastApiAt = now;
+
+    try {
+      var result = await api('/api/observe', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: state.sessionId, user_id: state.userId,
+          frame: frame, spoken: els.input.value.trim()
+        })
+      });
+      handleTick(result);
+    } catch (err) {
+      if (err.status === 429) {
+        state.pausedUntil = Date.now() + ((err.retryAfter || 30) * 1000);
+        els.seenLine.textContent = 'Paused — model is rate-limited';
+      } else {
+        els.seenLine.textContent = 'Could not look just now.';
       }
-    });
-    if (!listener.isSupported()) { return null; }
-    // Deliberately NOT Speaker.unlock() here: unlocking speaks a silent
-    // utterance, and synthesis starting alongside recognition kills the mic.
-    // Unlock happens on the send/suggestion gestures instead.
-    els.micBtn.addEventListener('click', function () { listener.toggle(); });
-    return listener;
+    }
   }
 
-  /* ---------------- sending ---------------- */
-  els.composer.addEventListener('submit', function (event) {
-    event.preventDefault();
+  function handleTick(result) {
+    if (!result.available) { els.seenLine.textContent = result.note || 'Cannot see right now.'; return; }
+
+    var names = (result.seen || []).map(function (i) { return i.name; });
+    els.seenLine.textContent = names.length
+      ? 'I can see: ' + names.join(', ')
+      : 'Nothing I recognise yet.';
+
+    // Only speak up when something actually changed — narrating a static scene
+    // every few seconds is precisely the nagging this is meant to replace.
+    if (result.narration) {
+      say(result.narration, { transient: true });
+      if (Speaker.isSupported()) { Speaker.speak(result.narration); }
+    }
+    if (result.logged) { refreshObservations(); }
+  }
+
+  /* ───────── conversation ───────── */
+  els.composer.addEventListener('submit', function (e) {
+    e.preventDefault();
     Speaker.unlock();
     send(els.input.value);
   });
 
-  document.querySelectorAll('.chip').forEach(function (chip) {
-    chip.addEventListener('click', function () { Speaker.unlock(); send(chip.dataset.say); });
+  document.querySelectorAll('.quick-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      Speaker.unlock();
+      document.querySelectorAll('.quick-btn').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      var phrases = {
+        leave: "I'm heading out",
+        recall: 'Where are my keys?',
+        timeline: 'What did I do today?'
+      };
+      var titles = {
+        leave: ["I'm heading out", 'Point the camera at your things and I’ll check what’s missing.'],
+        recall: ['Where is it?', 'I’ll look through what I’ve noticed.'],
+        timeline: ['What did I do today?', 'I’ll piece it together from what I saw.']
+      };
+      els.workflowTitle.textContent = titles[btn.dataset.action][0];
+      els.workflowSub.textContent = titles[btn.dataset.action][1];
+      send(phrases[btn.dataset.action]);
+    });
   });
 
   async function send(text) {
     text = (text || '').trim();
     if (!text || state.busy) { return; }
-
     state.busy = true;
     els.sendBtn.disabled = true;
-    els.dot.classList.add('busy');
     els.input.value = '';
-    addMessage('user', text);
-    var thinking = addMessage('agent', 'thinking…', { thinking: true });
+    setAgentStatus('Thinking');
+    setVoice('busy', 'Thinking…', '“' + text + '”');
 
     var payload = { text: text, session_id: state.sessionId, user_id: state.userId };
-    if (LEAVING.test(text) && camera.isRunning()) { payload.frame = captureFrame(); }
+    // If the camera is already open, the current view is part of the question.
+    if (camera.isRunning()) { payload.frame = camera.capture(); }
 
     try {
       var reply = await api('/api/chat', { method: 'POST', body: JSON.stringify(payload) });
-      thinking.remove();
       state.sessionId = reply.session_id || state.sessionId;
-      var node = addMessage('agent', reply.reply || '(no reply)', { meta: reply });
-      renderWorkflow(node, reply.workflow_results);
-      if (els.speakToggle.checked) { Speaker.speak(reply.reply); }
-      await refreshKnowledge();
+      say(reply.reply || 'I don’t have an answer for that.', { rows: detailRowsFor(reply) });
+      if (Speaker.isSupported()) { Speaker.speak(reply.reply); }
+      highlightAnswer(reply);
+      await refreshObservations();
     } catch (err) {
-      thinking.remove();
-      addMessage('agent', err.message, { error: true });
+      say(err.status === 429
+        ? 'I’m rate-limited right now. Try again in about ' + Math.round(err.retryAfter || 30) + ' seconds.'
+        : err.message);
     } finally {
       state.busy = false;
       els.sendBtn.disabled = false;
-      els.dot.classList.remove('busy');
+      setAgentStatus(state.watching ? 'Watching' : 'Ready');
+      setVoice('idle', 'Voice', RESTING_HINT);
     }
   }
 
-  /* ---------------- rendering ---------------- */
-  function addMessage(role, text, opts) {
+  function detailRowsFor(reply) {
+    var result = (reply.workflow_results || [])[0];
+    if (!result) { return []; }
+    if (result.workflow === 'item_recall' && result.sightings && result.sightings.length) {
+      var s = result.sightings[0];
+      return [
+        { k: 'Last seen', v: [s.location, s.detail].filter(Boolean).join(', ') || '—' },
+        { k: 'Time', v: s.time },
+        { k: 'How', v: s.method },
+        { k: 'Confidence', v: Math.round((result.confidence || 0) * 100) + '% (' + result.confidence_label + ')' }
+      ];
+    }
+    if (result.workflow === 'leave_detection') {
+      return [
+        { k: 'Routine', v: result.routine },
+        { k: 'Missing', v: (result.missing_items || []).map(function (m) { return m.item; }).join(', ') || 'nothing' },
+        { k: 'Found', v: (result.found_items || []).map(function (f) { return f.name; }).join(', ') || 'nothing' }
+      ];
+    }
+    if (result.workflow === 'daily_timeline') {
+      return [{ k: 'Moments', v: String((result.entries || []).length) }, { k: 'Day', v: result.day }];
+    }
+    return [];
+  }
+
+  function highlightAnswer(reply) {
+    var result = (reply.workflow_results || [])[0];
+    if (!result) { return; }
+    var wanted = result.workflow === 'item_recall' ? String(result.item || '').toLowerCase() : null;
+    if (!wanted) { globe.highlight(null); return; }
+    var match = state.observations.find(function (o) { return o.label.toLowerCase() === wanted; });
+    globe.highlight(match ? match.id : null);
+  }
+
+  /* ───────── the answer card ───────── */
+  function say(text, opts) {
     opts = opts || {};
-    var placeholder = els.transcript.querySelector('.placeholder');
-    if (placeholder) { placeholder.remove(); }
+    clearInterval(state.revealTimer);
+    els.response.hidden = false;
+    els.answer.textContent = '';
+    state.detailRows = opts.rows || [];
+    els.toggleDetails.hidden = state.detailRows.length === 0;
+    els.details.hidden = true;
+    els.toggleDetails.textContent = 'Details';
 
-    var node = document.createElement('div');
-    node.className = 'msg ' + role + (opts.thinking ? ' thinking' : '') + (opts.error ? ' error' : '');
+    // Word by word: the whole sentence appearing at once is a wall to re-read.
+    var words = String(text).split(/\s+/);
+    var shown = 0;
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) { els.answer.textContent = text; return; }
 
-    var body = document.createElement('div');
-    body.textContent = text;
-    node.appendChild(body);
-
-    if (opts.meta && (opts.meta.intent || (opts.meta.tool_calls || []).length)) {
-      var meta = document.createElement('div');
-      meta.className = 'meta';
-      if (opts.meta.intent && opts.meta.intent !== 'unknown') {
-        meta.appendChild(tag(opts.meta.intent));
+    els.speakBars.hidden = false;
+    state.revealTimer = setInterval(function () {
+      shown += 1;
+      els.answer.textContent = words.slice(0, shown).join(' ');
+      if (shown >= words.length) {
+        clearInterval(state.revealTimer);
+        els.speakBars.hidden = true;
       }
-      (opts.meta.tool_calls || []).forEach(function (call) { meta.appendChild(tag(call.name + '()')); });
-      if (opts.meta.degraded) { meta.appendChild(tag('no-model fallback')); }
-      node.appendChild(meta);
-    }
-
-    els.transcript.appendChild(node);
-    els.transcript.scrollTop = els.transcript.scrollHeight;
-    return node;
+    }, REVEAL_MS);
   }
 
-  function tag(text) {
-    var el = document.createElement('span');
-    el.className = 'tag';
-    el.textContent = text;
-    return el;
-  }
-
-  function renderWorkflow(node, results) {
-    (results || []).forEach(function (result) {
-      if (result.workflow === 'leave_detection') { node.appendChild(leaveResult(result)); }
-      else if (result.workflow === 'item_recall') { node.appendChild(recallResult(result)); }
-    });
-  }
-
-  function section(title) {
-    var wrap = document.createElement('div');
-    wrap.className = 'result';
-    var h = document.createElement('h4');
-    h.textContent = title;
-    wrap.appendChild(h);
-    return wrap;
-  }
-
-  function itemRow(names, cls) {
-    var row = document.createElement('div');
-    row.className = 'items';
-    names.forEach(function (name) {
-      var chip = document.createElement('span');
-      chip.className = 'item ' + cls;
-      chip.textContent = name;
-      row.appendChild(chip);
-    });
-    return row;
-  }
-
-  function leaveResult(result) {
-    var wrap = section('Scan · ' + result.routine + (result.scene ? ' · ' + result.scene : ''));
-    var missing = (result.missing_items || []).map(function (m) { return m.item; });
-    var found = (result.found_items || []).map(function (f) { return f.name; });
-    if (missing.length) { wrap.appendChild(itemRow(missing, 'missing')); }
-    if (found.length) { wrap.appendChild(itemRow(found, 'found')); }
-    (result.missing_items || []).forEach(function (m) {
-      if (!m.hint) { return; }
-      var p = document.createElement('div');
-      p.className = 'obs-detail';
-      p.style.marginTop = '6px';
-      p.textContent = m.item + ' — ' + m.hint;
-      wrap.appendChild(p);
-    });
-    return wrap;
-  }
-
-  function recallResult(result) {
-    var wrap = section('Recall · confidence ' + result.confidence_label + ' (' + result.confidence + ')');
-    (result.sightings || []).slice(0, 4).forEach(function (s) {
-      var row = document.createElement('div');
-      row.className = 'obs';
-      var t = document.createElement('time');
-      t.textContent = s.time;
-      var body = document.createElement('div');
-      body.className = 'obs-body';
-      var where = document.createElement('div');
-      where.className = 'obs-subject';
-      /* Keep the specific half ("on the kitchen counter") alongside the coarse
-         one ("home") — the specific half is what saves a search. */
-      where.textContent = [s.location, s.detail].filter(Boolean).join(' · ') || 'seen';
-      var how = document.createElement('div');
-      how.className = 'obs-detail';
-      how.textContent = s.method + ' · confidence ' + s.confidence;
-      body.appendChild(where);
-      body.appendChild(how);
-      row.appendChild(t);
-      row.appendChild(body);
-      wrap.appendChild(row);
-    });
-    return wrap;
-  }
-
-  /* ---------------- knowledge panel ---------------- */
-  document.querySelectorAll('.tab').forEach(function (tabBtn) {
-    tabBtn.addEventListener('click', function () {
-      document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
-      tabBtn.classList.add('active');
-      Object.keys(els.panels).forEach(function (key) {
-        els.panels[key].hidden = key !== tabBtn.dataset.tab;
-      });
-    });
+  els.gotIt.addEventListener('click', function () {
+    clearInterval(state.revealTimer);
+    els.response.hidden = true;
+    els.speakBars.hidden = true;
+    Speaker.stop();
+    globe.highlight(null);
+    document.querySelectorAll('.quick-btn').forEach(function (b) { b.classList.remove('active'); });
+    els.workflowTitle.textContent = 'Ready to listen';
+    els.workflowSub.textContent = 'Tap one thing below. I’ll handle the rest.';
   });
 
-  els.refreshState.addEventListener('click', refreshKnowledge);
+  els.toggleDetails.addEventListener('click', function () {
+    var opening = els.details.hidden;
+    els.details.textContent = '';
+    state.detailRows.forEach(function (row) {
+      var line = document.createElement('div');
+      line.className = 'details-row';
+      var k = document.createElement('span'); k.className = 'k'; k.textContent = row.k;
+      var v = document.createElement('span'); v.className = 'v'; v.textContent = row.v;
+      line.appendChild(k); line.appendChild(v);
+      els.details.appendChild(line);
+    });
+    els.details.hidden = !opening;
+    els.toggleDetails.textContent = opening ? 'Hide details' : 'Details';
+  });
 
-  async function refreshKnowledge() {
-    try {
-      var obs = await api('/api/observations?hours=24&user_id=' + encodeURIComponent(state.userId || ''));
-      renderObservations(obs.observations || []);
-      var routines = await api('/api/routines?user_id=' + encodeURIComponent(state.userId || ''));
-      renderRoutines(routines.routines || []);
-    } catch (err) {
-      /* The panel is a nicety; a failure here must not break the conversation. */
-      console.warn('knowledge refresh failed', err);
-    }
+  /* ───────── voice ───────── */
+  function setVoice(mode, status, transcript) {
+    els.voiceStatus.textContent = status;
+    els.voiceStatus.className = 'voice-status' + (mode === 'listening' ? ' listening' : mode === 'busy' ? ' busy' : '');
+    els.voiceTranscript.textContent = transcript;
+    els.micBtn.classList.toggle('listening', mode === 'listening');
+    els.micBtn.classList.toggle('busy', mode === 'busy');
+    els.micHalo.classList.toggle('on', mode === 'listening');
+    els.micHalo.classList.toggle('listening', mode === 'listening');
+    els.micBtn.setAttribute('aria-pressed', String(mode === 'listening'));
+    els.micBtn.setAttribute('aria-label', mode === 'listening' ? 'Stop listening' : 'Talk to Omnistant');
   }
 
-  function renderObservations(rows) {
-    var panel = els.panels.observations;
-    panel.textContent = '';
-    if (!rows.length) {
-      panel.innerHTML = '<p class="placeholder">No observations in the last 24 hours.</p>';
+  function setupVoice() {
+    var listener = new Listener({
+      onPartial: function (t) { setVoice('listening', 'Listening — tap to stop', t); },
+      onResult: function (t) { send(t); },
+      onStateChange: function (listening) {
+        if (listening) { setVoice('listening', 'Listening — tap to stop', 'Go ahead…'); setAgentStatus('Listening'); }
+        else if (!state.busy) { setVoice('idle', 'Voice', RESTING_HINT); setAgentStatus(state.watching ? 'Watching' : 'Ready'); }
+      },
+      onError: function (message) { setVoice('idle', 'Voice', RESTING_HINT); say(message); }
+    });
+    if (!listener.isSupported()) {
+      els.micBtn.disabled = true;
+      els.micBtn.title = 'Voice input is not supported in this browser';
+      els.voiceTranscript.textContent = 'Voice isn’t supported here — type below.';
       return;
     }
-    rows.forEach(function (o) {
-      var row = document.createElement('div');
-      row.className = 'obs';
-      var t = document.createElement('time');
-      t.textContent = o.time;
-      var body = document.createElement('div');
-      body.className = 'obs-body';
-      var subject = document.createElement('div');
-      subject.className = 'obs-subject';
-      subject.textContent = o.subject;
-      var detail = document.createElement('div');
-      detail.className = 'obs-detail';
-      detail.textContent = [o.location, o.method, 'conf ' + o.confidence].filter(Boolean).join(' · ');
-      body.appendChild(subject);
-      body.appendChild(detail);
-      row.appendChild(t);
-      row.appendChild(body);
-      panel.appendChild(row);
-    });
-  }
-
-  function renderRoutines(rows) {
-    var panel = els.panels.routines;
-    panel.textContent = '';
-    if (!rows.length) {
-      panel.innerHTML = '<p class="placeholder">No routines learned yet. Tell it where you\'re going.</p>';
-      return;
-    }
-    rows.forEach(function (r) {
-      var wrap = document.createElement('div');
-      wrap.className = 'routine';
-      var name = document.createElement('div');
-      name.className = 'routine-name';
-      name.textContent = r.routine_name + ' ';
-      var count = document.createElement('span');
-      count.textContent = '· seen on ' + r.times_observed + ' trip' + (r.times_observed === 1 ? '' : 's');
-      name.appendChild(count);
-      wrap.appendChild(name);
-      wrap.appendChild(itemRow(r.expected_items || [], 'extra'));
-      panel.appendChild(wrap);
-    });
+    els.micBtn.addEventListener('click', function () { listener.toggle(); });
   }
 
   boot();

@@ -1,0 +1,41 @@
+graph LR
+    subgraph LOOP["↺ HOW IT LEARNS — why week two beats week one"]
+        direction LR
+        S1["🚪 leave scan<br/><small>camera vs routine</small>"]
+        S2["📝 result logged<br/><small>leave_scans</small>"]
+        S3{"carried on ≥60%<br/>of the last 8 trips?"}
+        S4["✅ added to <b>routines</b><br/><small>now expected next time</small>"]
+        S1 --> S2 --> S3
+        S3 -->|yes| S4
+        S3 -->|no| S2
+        S4 -->|"raises the bar for the next scan"| S1
+    end
+
+    subgraph DECAY["📉 HOW SURE IT IS — one camera sighting, as it ages"]
+        direction LR
+        D0["<b>confidence =<br/>base × method × ½^(age ÷ 6h)</b><br/><small>visual 1.0 · voice .85 · manual .8 · inferred .55</small>"]
+        D1["<b>0h · 0.90</b><br/>high<br/><small>“it should still be there”</small>"]
+        D2["<b>6h · 0.45</b><br/>medium<br/><small>“I'd double-check”</small>"]
+        D3["<b>12h · 0.23</b><br/>low<br/><small>“I wouldn't rely on it”</small>"]
+        D4["<b>24h · 0.06</b><br/>low<br/><small>effectively no longer evidence</small>"]
+        D0 --> D1 -->|"6h half-life"| D2 --> D3 --> D4
+    end
+
+    subgraph FAIL["⚠️ HOW IT FAILS — honestly, never confidently"]
+        direction TB
+        F1["📷 <b>no camera / vision error</b><br/><small>“I can't check, but for work<br/>you normally take…” — never guesses</small>"]
+        F2["🚦 <b>Gemini over quota</b><br/><small>429 + Retry-After; tool work<br/>already done is returned, not discarded</small>"]
+        F3["🔌 <b>Postgres unreachable</b><br/><small>in-memory store, and /health says<br/><b>degraded</b> — not “ok”</small>"]
+        F4["🗣️ <b>no speech recognition</b><br/><small>typing always works;<br/>the reason appears in the transcript</small>"]
+    end
+
+    classDef loop  fill:#E6F4EA,stroke:#0F9D58,color:#0a3d22
+    classDef dec   fill:#E8F0FE,stroke:#4285F4,color:#0d2f6b
+    classDef decf  fill:#4285F4,stroke:#1a56c4,color:#fff
+    classDef fail  fill:#FFF4E5,stroke:#F57C00,color:#5c3d00
+    classDef q     fill:#0F9D58,stroke:#0a6c3c,color:#fff
+    class S1,S2,S4 loop
+    class S3 q
+    class D1,D2,D3,D4 dec
+    class D0 decf
+    class F1,F2,F3,F4 fail

@@ -15,19 +15,33 @@ deterministic functions over the log, and the model's job is language.
 
 ---
 
-## The diagram
+## The diagrams
+
+### 1 · Architecture
 
 ![Architecture](images/architecture.png)
 
-Source: [`architecture.mmd`](architecture.mmd). Regenerate with:
+Two entry points is the point of the picture: one is a person, the other is
+nobody at all. Both run the same workflows against the same log.
+
+### 2 · Behaviour — how it learns, how sure it is, how it fails
+
+![Behaviour](images/behaviour.png)
+
+Split out deliberately. Folding the learning loop and the failure modes into the
+architecture diagram was tried and rejected: a cycle spanning the whole graph
+destroys the layout engine's ranking, and the result took minutes rather than
+seconds to read. Each figure now does one job.
+
+The decay figures are computed from `score_confidence`, not illustrative — a
+camera sighting starts at 0.90 and is worth 0.06 a day later.
+
+Sources: [`architecture.mmd`](architecture.mmd), [`behaviour.mmd`](behaviour.mmd).
 
 ```bash
 npx -y @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/images/architecture.png -b white -w 1500 --scale 2
+npx -y @mermaid-js/mermaid-cli -i docs/behaviour.mmd    -o docs/images/behaviour.png    -b white -w 1700 --scale 2
 ```
-
-Two entry points is the point of the picture: the left-hand one is a person, the
-right-hand one is nobody at all. Both run the same workflows against the same
-log.
 
 ---
 

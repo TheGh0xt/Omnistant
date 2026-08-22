@@ -99,11 +99,6 @@ async def record_observation(
     await get_store().add_observation(observation)
 
     cache = get_cache()
-    await cache.note_last_seen(
-        user_id, observation.subject,
-        {"location": observation.location_label, "at": now.isoformat(),
-         "confidence": 0.9, "method": "voice"},
-    )
     if kind == "location":
         state = tool_context.state
         state["current_location"] = normalize_subject(subject)

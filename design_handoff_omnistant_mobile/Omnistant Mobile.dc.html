@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#EDF0F4; font-family:Montserrat, "SF Pro Display", "Segoe UI", system-ui, sans-serif; color:#2C3E50; letter-spacing:0.3px; }
+  a { color:#4A90E2; text-decoration:underline; }
+  a:hover { color:#357ABD; }
+  button { font-family:inherit; letter-spacing:0.3px; }
+  *:focus-visible { outline:3px solid #4A90E2; outline-offset:2px; border-radius:8px; }
+  @keyframes riseIn { from { opacity:0; transform:translateY(28px); } to { opacity:1; transform:none; } }
+  @keyframes popIn { from { opacity:0; transform:scale(0.5); } to { opacity:1; transform:scale(1); } }
+  @keyframes softPulse { 0%,100% { opacity:0.55; } 50% { opacity:1; } }
+  @keyframes haloPulse { 0%,100% { transform:scale(1); opacity:0.35; } 50% { transform:scale(1.18); opacity:0.12; } }
+  @keyframes speakBar { 0%,100% { transform:scaleY(0.4); } 50% { transform:scaleY(1); } }
+  @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+</style>
+</helmet>
+<div style="min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:20px; padding:40px 20px 56px;">
+  <div style="width:375px; height:812px; background:#F8F9FB; border-radius:40px; box-shadow:0 24px 60px rgba(44,62,80,0.16); display:flex; flex-direction:column; overflow:hidden; position:relative;">
+
+    <header style="height:56px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 20px; background:#F8F9FB;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="width:10px; height:10px; border-radius:50%; background:#34A853;"></div>
+        <span style="font-size:18px; font-weight:600;">Omnistant</span>
+      </div>
+      <span style="font-size:12px; color:#7F8C8D;">{{ statusLabel }}</span>
+    </header>
+
+    <main style="flex:1; overflow-y:auto; padding:4px 20px 28px; display:flex; flex-direction:column; gap:20px;">
+
+      <section style="background:#FFFFFF; border-radius:16px; padding:16px; box-shadow:0 2px 10px rgba(44,62,80,0.06); display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <h2 style="margin:0; font-size:16px; font-weight:600;">What I remember</h2>
+          <button type="button" onClick="{{ toggleGlobeScreen }}" aria-label="Open full memory view" style="min-height:36px; padding:0 12px; border:1px solid #E8EAED; background:#FFFFFF; color:#4A90E2; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer;" style-hover="background:#F2F7FD; border-color:#4A90E2;">{{ globeToggleLabel }}</button>
+        </div>
+        <div style="position:relative; align-self:center; touch-action:none;">
+          {{ globe }}
+          <div style="position:absolute; left:{{ tipX }}; top:{{ tipY }}; transform:translate(-50%,-125%); background:#2C3E50; color:#FFFFFF; font-size:12px; line-height:1.4; padding:8px 10px; border-radius:8px; max-width:220px; text-align:center; text-wrap:pretty; pointer-events:none; opacity:{{ tipOpacity }}; transition:opacity 300ms ease;">{{ tipText }}</div>
+        </div>
+        <div style="display:flex; justify-content:center; gap:16px; flex-wrap:wrap; padding-top:4px;">
+          <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#7F8C8D;"><span style="width:9px; height:9px; border-radius:50%; background:#4A90E2;"></span>Location</span>
+          <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#7F8C8D;"><span style="width:9px; height:9px; border-radius:50%; background:#34A853;"></span>Item</span>
+          <span style="display:flex; align-items:center; gap:6px; font-size:12px; color:#7F8C8D;"><span style="width:9px; height:9px; border-radius:50%; background:#BD10E0;"></span>Activity</span>
+        </div>
+      </section>
+
+      <sc-if value="{{ isGlobeScreen }}" hint-placeholder-val="{{ false }}">
+        <section style="display:flex; flex-direction:column; gap:12px; animation:riseIn 400ms ease-out both;">
+          <h3 style="margin:0; font-size:18px; font-weight:600;">Everything I've noticed</h3>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <sc-for list="{{ filters }}" as="f" hint-placeholder-count="4">
+              <button type="button" onClick="{{ f.onClick }}" style="min-height:36px; padding:0 14px; border-radius:999px; border:1px solid {{ f.border }}; background:{{ f.bg }}; color:{{ f.color }}; font-size:12px; font-weight:600; cursor:pointer;">{{ f.label }}</button>
+            </sc-for>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <sc-for list="{{ visibleObs }}" as="o" hint-placeholder-count="5">
+              <button type="button" onClick="{{ o.onClick }}" style="text-align:left; min-height:48px; background:#FFFFFF; border:1px solid #E8EAED; border-radius:12px; padding:12px 14px; display:flex; align-items:center; gap:12px; cursor:pointer; box-shadow:0 2px 8px rgba(44,62,80,0.05);" style-hover="border-color:#4A90E2;">
+                <span style="width:10px; height:10px; border-radius:50%; background:{{ o.color }}; flex:none;"></span>
+                <span style="flex:1; display:flex; flex-direction:column; gap:2px;">
+                  <span style="font-size:16px; font-weight:500; color:#2C3E50;">{{ o.label }}</span>
+                  <span style="font-size:12px; color:#7F8C8D;">{{ o.meta }}</span>
+                </span>
+                <span style="font-size:12px; color:#7F8C8D;">{{ o.confLabel }}</span>
+              </button>
+            </sc-for>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ showWorkflow }}" hint-placeholder-val="{{ true }}">
+        <section style="display:flex; flex-direction:column; gap:16px; animation:riseIn 400ms ease-out both;">
+          <div style="height:1px; background:#E8EAED;"></div>
+          <h1 style="margin:0; text-align:center; font-size:20px; font-weight:600; line-height:1.4; text-wrap:pretty;">{{ workflowTitle }}</h1>
+          <p style="margin:0; text-align:center; font-size:16px; line-height:1.6; color:#7F8C8D; text-wrap:pretty;">{{ workflowSub }}</p>
+
+          <sc-if value="{{ showPrimaryAction }}" hint-placeholder-val="{{ true }}">
+            <button type="button" onClick="{{ runWorkflow }}" style="min-height:56px; border:none; border-radius:12px; background:#4A90E2; color:#FFFFFF; font-size:16px; font-weight:600; cursor:pointer; box-shadow:0 4px 12px rgba(74,144,226,0.24); transition:transform 300ms ease, background 300ms ease;" style-hover="background:#3F81CE;" style-active="transform:scale(0.98);">{{ primaryActionLabel }}</button>
+          </sc-if>
+
+          <sc-if value="{{ isScanning }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#FFFFFF; border:1px solid #E8EAED; border-radius:12px; padding:20px; display:flex; flex-direction:column; align-items:center; gap:12px;">
+              <div style="width:100%; height:120px; border-radius:10px; background:linear-gradient(180deg,#EEF3F8,#E4EBF3); display:flex; align-items:center; justify-content:center; color:#7F8C8D; font-size:12px;">Camera preview</div>
+              <span style="font-size:16px; color:#4A90E2; font-weight:500; animation:softPulse 2s ease-in-out infinite;">{{ scanLabel }}</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isTimeline }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#FFFFFF; border:1px solid #E8EAED; border-radius:12px; padding:20px 16px; display:flex; flex-direction:column; gap:16px;">
+              <div style="position:relative; height:56px;">
+                <div style="position:absolute; top:14px; left:6px; right:6px; height:6px; border-radius:999px; background:#E8EAED;"></div>
+                <sc-for list="{{ timeline }}" as="e" hint-placeholder-count="5">
+                  <button type="button" onClick="{{ e.onClick }}" aria-label="{{ e.aria }}" style="position:absolute; top:0; left:{{ e.left }}; transform:translateX(-50%); width:48px; height:56px; border:none; background:transparent; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:6px; padding:0;">
+                    <span style="width:16px; height:16px; margin-top:9px; border-radius:50%; background:{{ e.dot }}; box-shadow:0 0 0 4px {{ e.ring }}; transition:box-shadow 300ms ease;"></span>
+                    <span style="font-size:12px; color:#7F8C8D;">{{ e.time }}</span>
+                  </button>
+                </sc-for>
+              </div>
+              <div style="border-top:1px solid #E8EAED; padding-top:14px; display:flex; flex-direction:column; gap:4px;">
+                <span style="font-size:16px; font-weight:500;">{{ timelineDetailTitle }}</span>
+                <span style="font-size:12px; color:#7F8C8D;">{{ timelineDetailMeta }}</span>
+              </div>
+            </div>
+          </sc-if>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ hasResponse }}" hint-placeholder-val="{{ false }}">
+        <section aria-live="polite" style="display:flex; flex-direction:column; gap:16px; background:#FFFFFF; border-radius:16px; padding:20px; box-shadow:0 2px 12px rgba(44,62,80,0.07); animation:riseIn 400ms ease-out both;">
+          <p style="margin:0; font-size:24px; line-height:1.5; font-weight:500; text-wrap:pretty; min-height:72px;">{{ responseText }}</p>
+          <sc-if value="{{ showDetails }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:10px; background:#F8F9FB; border-radius:12px; padding:14px;">
+              <sc-for list="{{ detailRows }}" as="d" hint-placeholder-count="3">
+                <div style="display:flex; justify-content:space-between; gap:12px; font-size:12px;">
+                  <span style="color:#7F8C8D;">{{ d.k }}</span>
+                  <span style="color:#2C3E50; font-weight:500;">{{ d.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <div style="display:flex; gap:8px;">
+            <button type="button" onClick="{{ goHome }}" style="flex:1; min-height:48px; border:none; border-radius:12px; background:#7ED321; color:#2C3E50; font-size:16px; font-weight:600; cursor:pointer; transition:transform 300ms ease, background 300ms ease;" style-hover="background:#72C119;" style-active="transform:scale(0.98);">Got it</button>
+            <button type="button" onClick="{{ toggleDetails }}" style="flex:1; min-height:48px; border:1px solid #E8EAED; border-radius:12px; background:#FFFFFF; color:#4A90E2; font-size:16px; font-weight:600; cursor:pointer; transition:transform 300ms ease, background 300ms ease;" style-hover="background:#F2F7FD; border-color:#4A90E2;" style-active="transform:scale(0.98);">{{ detailsLabel }}</button>
+          </div>
+        </section>
+      </sc-if>
+
+      <nav aria-label="Quick actions" style="display:flex; flex-direction:column; gap:12px; margin-top:auto; padding-top:8px;">
+        <div style="height:1px; background:#E8EAED;"></div>
+        <span style="font-size:12px; color:#7F8C8D;">Quick actions</span>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <sc-for list="{{ quickActions }}" as="q" hint-placeholder-count="3">
+            <button type="button" onClick="{{ q.onClick }}" style="min-height:48px; border-radius:12px; border:1px solid {{ q.border }}; background:{{ q.bg }}; color:{{ q.color }}; font-size:16px; font-weight:600; cursor:pointer; text-align:left; padding:0 16px; transition:transform 300ms ease, background 300ms ease;" style-hover="border-color:#4A90E2;" style-active="transform:scale(0.98);">{{ q.label }}</button>
+          </sc-for>
+        </div>
+      </nav>
+    </main>
+
+    <footer style="flex:none; background:#FFFFFF; border-top:1px solid #E8EAED; padding:14px 20px 22px; display:flex; flex-direction:column; gap:12px;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div style="position:relative; width:56px; height:56px; flex:none;">
+          <div style="position:absolute; inset:0; border-radius:50%; background:{{ micHaloColor }}; opacity:{{ micHaloOpacity }}; animation:{{ micHaloAnim }};"></div>
+          <button type="button" onClick="{{ toggleVoice }}" aria-label="{{ micAria }}" aria-pressed="{{ micPressed }}" style="position:relative; width:56px; height:56px; border-radius:50%; border:none; background:{{ micColor }}; color:#FFFFFF; cursor:pointer; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 12px rgba(44,62,80,0.16); transition:transform 300ms ease, background 300ms ease;" style-active="transform:scale(0.98);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v4"></path></svg>
+          </button>
+        </div>
+        <div style="flex:1; display:flex; flex-direction:column; gap:4px; min-width:0;">
+          <span style="font-size:12px; color:{{ voiceStatusColor }}; font-weight:600;">{{ voiceStatus }}</span>
+          <p style="margin:0; font-size:16px; line-height:1.5; color:#2C3E50; text-wrap:pretty;">{{ voiceLine }}</p>
+        </div>
+        <sc-if value="{{ isSpeaking }}" hint-placeholder-val="{{ false }}">
+          <div aria-hidden="true" style="display:flex; align-items:center; gap:4px; height:24px; flex:none;">
+            <span style="width:4px; height:20px; border-radius:2px; background:#4A90E2; animation:speakBar 1.2s ease-in-out infinite;"></span>
+            <span style="width:4px; height:20px; border-radius:2px; background:#4A90E2; animation:speakBar 1.2s ease-in-out infinite 0.2s;"></span>
+            <span style="width:4px; height:20px; border-radius:2px; background:#4A90E2; animation:speakBar 1.2s ease-in-out infinite 0.4s;"></span>
+          </div>
+        </sc-if>
+      </div>
+      <button type="button" onClick="{{ toggleWake }}" aria-pressed="{{ wakePressed }}" style="align-self:flex-start; min-height:36px; padding:0 12px; display:flex; align-items:center; gap:8px; border-radius:999px; border:1px solid {{ wakeBorder }}; background:{{ wakeBg }}; color:{{ wakeColor }}; font-size:12px; font-weight:600; cursor:pointer;">
+        <span style="width:9px; height:9px; border-radius:50%; background:{{ wakeDot }};"></span>{{ wakeLabel }}
+      </button>
+    </footer>
+  </div>
+  <p style="margin:0; font-size:12px; color:#7F8C8D; max-width:375px; text-align:center; line-height:1.6;">Drag the globe to rotate. Tap a point for details.</p>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;revealSpeed&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:150,&quot;min&quot;:60,&quot;max&quot;:400,&quot;step&quot;:10,&quot;unit&quot;:&quot;ms&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Motion&quot;}}">
+class Component extends DCLogic {
+  obs = [
+    { id:'keys', label:'Keys', place:'Home · kitchen counter', time:'8:42 AM', type:'item', lat:16, lon:24, conf:92 },
+    { id:'wallet', label:'Wallet', place:'Home · hallway', time:'8:40 AM', type:'item', lat:-8, lon:70, conf:88 },
+    { id:'badge', label:'Work badge', place:'Backpack', time:'8:39 AM', type:'item', lat:38, lon:120, conf:81 },
+    { id:'phone', label:'Phone', place:'Desk', time:'8:35 AM', type:'item', lat:-30, lon:160, conf:95 },
+    { id:'bottle', label:'Water bottle', place:'Kitchen', time:'8:12 AM', type:'item', lat:5, lon:205, conf:76 },
+    { id:'home', label:'Home', place:'Left at 8:47 AM', time:'8:47 AM', type:'location', lat:52, lon:300, conf:99 },
+    { id:'office', label:'Office', place:'Arrived 9:20 AM', time:'9:20 AM', type:'location', lat:-18, lon:330, conf:97 },
+    { id:'cafe', label:'Corner café', place:'Lunch stop', time:'12:30 PM', type:'location', lat:-46, lon:40, conf:84 },
+    { id:'gym', label:'Gym', place:'Tuesday routine', time:'6:15 PM', type:'location', lat:30, lon:250, conf:71 },
+    { id:'standup', label:'Standup', place:'Meeting room 2', time:'9:35 AM', type:'activity', lat:-58, lon:200, conf:90 },
+    { id:'focus', label:'Focus block', place:'Desk · 90 min', time:'10:10 AM', type:'activity', lat:62, lon:150, conf:87 },
+    { id:'walk', label:'Walk', place:'Around the block', time:'3:05 PM', type:'activity', lat:-12, lon:100, conf:68 },
+    { id:'dinner', label:'Cooking', place:'Home · kitchen', time:'7:10 PM', type:'activity', lat:24, lon:355, conf:79 }
+  ];
+
+  events = [
+    { id:'e1', time:'8:47', title:'Left home', meta:'Front door · keys, wallet, phone detected', type:'location' },
+    { id:'e2', time:'9:20', title:'Arrived at the office', meta:'23 min commute · usual route', type:'location' },
+    { id:'e3', time:'12:30', title:'Lunch at the corner café', meta:'42 min away from your desk', type:'location' },
+    { id:'e4', time:'14:00', title:'Back at the office', meta:'Focus block started at 14:10', type:'activity' },
+    { id:'e5', time:'18:15', title:'Home', meta:'Backpack down, keys on the counter', type:'location' }
+  ];
+
+  state = { screen:'home', stage:'idle', rot:0, sel:null, reveal:0, resp:null, details:false, filter:'all', highlight:null, tlSel:'e1', voice:'idle', heard:'', wake:false, phraseIdx:0 };
+
+  phrases = [
+    { text:"I'm heading to work", screen:'leave' },
+    { text:'Where are my keys?', screen:'recall' },
+    { text:'What did I do today?', screen:'timeline' }
+  ];
+
+  colorFor(t) { return t === 'location' ? '#4A90E2' : t === 'item' ? '#34A853' : '#BD10E0'; }
+
+  componentWillUnmount() { clearInterval(this._t); clearTimeout(this._s); clearInterval(this._v); clearTimeout(this._vt); }
+
+  stopVoice(mode) {
+    clearInterval(this._v); clearTimeout(this._vt);
+    this.setState(s => ({ voice: mode || 'idle', heard: mode === 'listening' ? '' : s.heard }));
+  }
+
+  toggleVoice = () => {
+    if (this.state.voice === 'listening') { this.stopVoice('idle'); return; }
+    clearInterval(this._v); clearTimeout(this._vt); clearInterval(this._t); clearTimeout(this._s);
+    const p = this.phrases[this.state.phraseIdx % this.phrases.length];
+    this.setState({ voice:'listening', heard:'', resp:null, reveal:0, details:false, highlight:null, phraseIdx:this.state.phraseIdx + 1 });
+    const words = p.text.split(' ');
+    let i = 0;
+    this._v = setInterval(() => {
+      i += 1;
+      this.setState({ heard: words.slice(0, i).join(' ') });
+      if (i >= words.length) {
+        clearInterval(this._v);
+        this._vt = setTimeout(() => {
+          this.setState({ voice:'thinking' });
+          this._vt = setTimeout(() => this.routeVoice(p.screen), 900);
+        }, 600);
+      }
+    }, 220);
+  };
+
+  routeVoice(screen) {
+    this.setState({ screen, stage:'done', sel:null });
+    if (screen === 'leave') {
+      this.setState({ stage:'scanning', voice:'thinking' });
+      this._vt = setTimeout(() => {
+        this.setState({ stage:'done' });
+        this.say("You're missing your keys from this morning.", [
+          { k:'Last seen', v:'Home · kitchen counter' }, { k:'Time', v:'8:42 AM' }, { k:'Confidence', v:'92%' }
+        ], 'keys');
+      }, 1600);
+    } else if (screen === 'recall') {
+      this.say('Your keys were last seen at home, on the kitchen counter, at 8:42 AM.', [
+        { k:'Observation', v:'Keys' }, { k:'Location', v:'Home · kitchen counter' }, { k:'Confidence', v:'92%' }
+      ], 'keys');
+    } else {
+      this.say('You left home at 8:47, worked until six, and came back at 6:15.', [
+        { k:'Moments logged', v:'5' }, { k:'Time away', v:'9h 28m' }, { k:'Confidence', v:'94%' }
+      ]);
+    }
+  }
+
+  toggleWake = () => this.setState(s => ({ wake:!s.wake }));
+
+  say(text, rows, highlight) {
+    clearInterval(this._t);
+    const speed = this.props.revealSpeed ?? 150;
+    this.setState({ resp:text, reveal:0, details:false, detailRows:rows || [], highlight:highlight || null, sel:highlight || null, voice:'speaking' });
+    const total = text.split(' ').length;
+    this._t = setInterval(() => {
+      this.setState(s => {
+        const n = s.reveal + 1;
+        if (n >= total) { clearInterval(this._t); return { reveal:n, voice:'idle' }; }
+        return { reveal:n };
+      });
+    }, speed);
+  }
+
+  reset(screen) {
+    clearInterval(this._t); clearTimeout(this._s); clearInterval(this._v); clearTimeout(this._vt);
+    this.setState({ screen, stage:'idle', resp:null, reveal:0, details:false, highlight:null, sel:null, voice:'idle', heard:'' });
+  }
+
+  run = () => {
+    const sc = this.state.screen;
+    if (sc === 'leave') {
+      this.setState({ stage:'scanning' });
+      this._s = setTimeout(() => {
+        this.setState({ stage:'done' });
+        this.say("You're missing your keys from this morning.", [
+          { k:'Last seen', v:'Home · kitchen counter' },
+          { k:'Time', v:'8:42 AM' },
+          { k:'Confidence', v:'92%' }
+        ], 'keys');
+      }, 1800);
+    } else if (sc === 'recall') {
+      this.setState({ stage:'done' });
+      this.say('Your keys were last seen at home, on the kitchen counter, at 8:42 AM.', [
+        { k:'Observation', v:'Keys' },
+        { k:'Location', v:'Home · kitchen counter' },
+        { k:'Confidence', v:'92%' }
+      ], 'keys');
+    }
+  };
+
+  drag = e => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    this._drag = { x:e.clientX, rot:this.state.rot, moved:false };
+  };
+  move = e => {
+    if (!this._drag) return;
+    const dx = e.clientX - this._drag.x;
+    if (Math.abs(dx) > 3) this._drag.moved = true;
+    this.setState({ rot:this._drag.rot + dx * 0.45 });
+  };
+  end = () => { this._drag = null; };
+
+  buildGlobe() {
+    const R = 112, C = 150, rot = this.state.rot;
+    const list = this.state.screen === 'globe' && this.state.filter !== 'all'
+      ? this.obs.filter(o => o.type === this.state.filter) : this.obs;
+    const pts = list.map(o => {
+      const la = o.lat * Math.PI / 180, lo = (o.lon + rot) * Math.PI / 180;
+      const x = Math.cos(la) * Math.sin(lo), y = Math.sin(la), z = Math.cos(la) * Math.cos(lo);
+      return { o, cx:C + x * R, cy:C - y * R, z };
+    }).sort((a, b) => a.z - b.z);
+    this._pts = pts;
+    const h = React.createElement;
+    const rings = [0.35, 0.65, 0.9].map((k, i) =>
+      h('ellipse', { key:'r' + i, cx:C, cy:C, rx:R * 0.98, ry:R * k, fill:'none', stroke:'#DDE4EC', strokeWidth:1 }));
+    const dots = pts.map(p => {
+      const on = this.state.sel === p.o.id, hi = this.state.highlight === p.o.id;
+      const r = 5 + 2.4 * p.z + (on ? 2 : 0);
+      const g = [];
+      if (hi) g.push(h('circle', { key:'h', cx:p.cx, cy:p.cy, r:r + 8, fill:'none', stroke:this.colorFor(p.o.type), strokeWidth:2, opacity:0.35, style:{ animation:'softPulse 2s ease-in-out infinite' } }));
+      g.push(h('circle', {
+        key:'d', cx:p.cx, cy:p.cy, r,
+        fill:this.colorFor(p.o.type),
+        opacity:0.4 + 0.6 * (p.z + 1) / 2,
+        style:{ cursor:'pointer', transition:'r 300ms ease' },
+        onPointerUp:() => { if (!this._drag || !this._drag.moved) this.setState({ sel:on ? null : p.o.id }); }
+      }));
+      return h('g', { key:p.o.id }, g);
+    });
+    return h('svg', {
+      width:300, height:300, viewBox:'0 0 300 300', role:'img',
+      'aria-label':'Memory globe with ' + list.length + ' observations',
+      style:{ display:'block', cursor:'grab', touchAction:'none' },
+      onPointerDown:this.drag, onPointerMove:this.move, onPointerUp:this.end, onPointerCancel:this.end
+    }, [
+      h('defs', { key:'defs' }, h('radialGradient', { id:'og', cx:'35%', cy:'30%' }, [
+        h('stop', { key:0, offset:'0%', stopColor:'#FFFFFF' }),
+        h('stop', { key:1, offset:'100%', stopColor:'#EDF2F8' })
+      ])),
+      h('circle', { key:'s', cx:C, cy:C, r:R, fill:'url(#og)', stroke:'#E8EAED', strokeWidth:1 }),
+      ...rings, ...dots
+    ]);
+  }
+
+  renderVals() {
+    const s = this.state;
+    const globe = this.buildGlobe();
+    const selPt = this._pts.find(p => p.o.id === s.sel);
+    const words = s.resp ? s.resp.split(' ') : [];
+    const tl = this.events.find(e => e.id === s.tlSel) || this.events[0];
+
+    const titles = {
+      home:'Ready to listen', leave:"I'm heading to work",
+      recall:'Where are my keys?', timeline:'What did I do today?'
+    };
+    const subs = {
+      home:'Tap one thing below. I\u2019ll handle the rest.',
+      leave:'Point the camera at your desk and I\u2019ll check what\u2019s missing.',
+      recall:'I\u2019ll look through what I noticed today.',
+      timeline:'Five moments. Tap one to see more.'
+    };
+
+    return {
+      globe,
+      statusLabel: s.voice === 'listening' ? 'Listening' : s.voice === 'thinking' ? 'Thinking' : s.voice === 'speaking' ? 'Speaking' : s.wake ? 'Standing by' : 'Ready',
+
+      isSpeaking: s.voice === 'speaking',
+      micColor: s.voice === 'listening' ? '#34A853' : s.voice === 'idle' ? '#4A90E2' : '#7F8C8D',
+      micHaloColor: s.voice === 'listening' ? '#34A853' : '#4A90E2',
+      micHaloOpacity: s.voice === 'listening' || (s.wake && s.voice === 'idle') ? 0.3 : 0,
+      micHaloAnim: s.voice === 'listening' ? 'haloPulse 2s ease-in-out infinite' : s.wake && s.voice === 'idle' ? 'haloPulse 4s ease-in-out infinite' : 'none',
+      micAria: s.voice === 'listening' ? 'Stop listening' : 'Talk to Omnistant',
+      micPressed: s.voice === 'listening',
+      toggleVoice: this.toggleVoice,
+      voiceStatus: s.voice === 'listening' ? 'Listening — tap to stop' : s.voice === 'thinking' ? 'Thinking…' : s.voice === 'speaking' ? 'Answering out loud' : 'Voice',
+      voiceStatusColor: s.voice === 'listening' ? '#34A853' : s.voice === 'idle' ? '#7F8C8D' : '#4A90E2',
+      voiceLine: s.voice === 'listening' || s.voice === 'thinking'
+        ? (s.heard || 'Go ahead, I\u2019m listening.')
+        : s.voice === 'speaking' ? (s.heard ? '\u201C' + s.heard + '\u201D' : 'Reading it back to you.')
+        : s.wake ? 'Say \u201CHey Omni\u201D, or tap to talk.' : 'Tap to talk. I only listen while you hold the floor.',
+
+      toggleWake: this.toggleWake,
+      wakePressed: s.wake,
+      wakeLabel: s.wake ? 'Wake word on — always listening' : 'Wake word off — tap to talk',
+      wakeBg: s.wake ? '#F2F7FD' : '#FFFFFF',
+      wakeBorder: s.wake ? '#4A90E2' : '#E8EAED',
+      wakeColor: s.wake ? '#357ABD' : '#7F8C8D',
+      wakeDot: s.wake ? '#34A853' : '#C7CDD4',
+
+      isGlobeScreen: s.screen === 'globe',
+      globeToggleLabel: s.screen === 'globe' ? 'Close' : 'Expand',
+      toggleGlobeScreen: () => this.reset(s.screen === 'globe' ? 'home' : 'globe'),
+
+      tipText: selPt ? selPt.o.label + ' • ' + selPt.o.place + ' • ' + selPt.o.time : '',
+      tipOpacity: selPt ? 1 : 0,
+      tipX: (selPt ? Math.min(Math.max(selPt.cx, 112), 188) : 150) + 'px',
+      tipY: (selPt ? Math.max(selPt.cy, 44) : 150) + 'px',
+
+      filters: [
+        { key:'all', label:'All' }, { key:'location', label:'Location' },
+        { key:'item', label:'Item' }, { key:'activity', label:'Activity' }
+      ].map(f => ({
+        label:f.label,
+        bg: s.filter === f.key ? '#4A90E2' : '#FFFFFF',
+        color: s.filter === f.key ? '#FFFFFF' : '#2C3E50',
+        border: s.filter === f.key ? '#4A90E2' : '#E8EAED',
+        onClick: () => this.setState({ filter:f.key })
+      })),
+      visibleObs: (s.filter === 'all' ? this.obs : this.obs.filter(o => o.type === s.filter)).map(o => ({
+        label:o.label, meta:o.place + ' · ' + o.time, confLabel:o.conf + '%',
+        color:this.colorFor(o.type), onClick:() => this.setState({ sel:o.id })
+      })),
+
+      showWorkflow: s.screen !== 'globe',
+      workflowTitle: titles[s.screen] || '',
+      workflowSub: subs[s.screen] || '',
+      showPrimaryAction: (s.screen === 'leave' || s.screen === 'recall') && s.stage === 'idle',
+      primaryActionLabel: s.screen === 'recall' ? 'Speak now' : 'Start camera',
+      runWorkflow: this.run,
+      isScanning: s.stage === 'scanning',
+      scanLabel: 'Scanning your desk…',
+
+      isTimeline: s.screen === 'timeline',
+      timeline: this.events.map((e, i) => ({
+        time:e.time, aria:e.time + ' ' + e.title, left:(6 + i * 22) + '%',
+        dot:this.colorFor(e.type),
+        ring: s.tlSel === e.id ? 'rgba(74,144,226,0.22)' : 'rgba(232,234,237,0.9)',
+        onClick:() => this.setState({ tlSel:e.id })
+      })),
+      timelineDetailTitle: tl.title,
+      timelineDetailMeta: tl.meta,
+
+      hasResponse: !!s.resp,
+      responseText: words.slice(0, s.reveal).join(' '),
+      showDetails: s.details,
+      detailsLabel: s.details ? 'Hide details' : 'Details',
+      detailRows: s.detailRows || [],
+      toggleDetails: () => this.setState({ details:!s.details }),
+      goHome: () => this.reset('home'),
+
+      quickActions: [
+        { key:'leave', label:'I\u2019m heading out' },
+        { key:'recall', label:'Where is…?' },
+        { key:'timeline', label:'What did I do today?' }
+      ].map(q => ({
+        label:q.label,
+        bg: s.screen === q.key ? '#F2F7FD' : '#FFFFFF',
+        color: s.screen === q.key ? '#357ABD' : '#2C3E50',
+        border: s.screen === q.key ? '#4A90E2' : '#E8EAED',
+        onClick: () => this.reset(q.key)
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

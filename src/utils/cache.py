@@ -156,16 +156,11 @@ class Cache:
     async def clear_frame(self, session_id: str) -> None:
         await self.backend.delete(f"frame:{session_id}")
 
-    # --- last-seen index ---------------------------------------------------
-    async def note_last_seen(self, user_id: str, subject: str, payload: dict[str, Any]) -> None:
-        """Fast path for "where are my X" — avoids hitting Postgres for hot items."""
-        await self.backend.set(
-            f"lastseen:{user_id}:{subject}", json.dumps(payload, default=str), self._session_ttl
-        )
-
-    async def get_last_seen(self, user_id: str, subject: str) -> dict[str, Any] | None:
-        raw = await self.backend.get(f"lastseen:{user_id}:{subject}")
-        return json.loads(raw) if raw else None
+    # NOTE: there was a "last-seen" index here — one cached location per item,
+    # written on every observation. Nothing ever read it, and wiring a read would
+    # have meant answering "where is it?" from a copy that can go stale. This
+    # agent's one job is not to state an old location as fact, so the cache stays
+    # out of the recall path entirely: Postgres is the only source of a sighting.
 
     async def healthy(self) -> bool:
         return await self.backend.ping()

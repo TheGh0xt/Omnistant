@@ -2,102 +2,138 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Personal Context Agent</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+  <meta name="theme-color" content="#F8F9FB" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Omnistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👁️</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='none' stroke='%234A90E2' stroke-width='8'/><circle cx='38' cy='38' r='7' fill='%2334A853'/></svg>" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="dot" aria-hidden="true"></span>
-      <h1>Context Agent</h1>
-    </div>
-    <div class="status" id="status" aria-live="polite">
-      <span class="pill" data-key="gemini">gemini</span>
-      <span class="pill" data-key="postgres">postgres</span>
-      <span class="pill" data-key="redis">redis</span>
-    </div>
+  <header class="header">
+    <div class="brand"><span class="brand-dot" aria-hidden="true"></span><h1>Omnistant</h1></div>
+    <span class="agent-status" id="agentStatus" aria-live="polite">Ready</span>
   </header>
 
-  <main>
-    <!-- ---------- Camera ---------- -->
-    <section class="card camera-card">
+  <main id="main">
+    <!-- ───────── Memory globe ───────── -->
+    <section class="card globe-card" aria-labelledby="globeHeading">
       <div class="card-head">
-        <h2>Camera</h2>
-        <span class="hint" id="cameraHint">off</span>
+        <h2 id="globeHeading">What I remember</h2>
+        <button class="ghost-btn" id="expandGlobe" aria-expanded="false">Expand</button>
       </div>
-      <div class="viewport">
+      <div class="globe-wrap">
+        <svg id="globe" viewBox="0 0 300 300" width="300" height="300" role="img" aria-label="Memory globe. Drag to rotate, tap a point for details.">
+          <defs>
+            <radialGradient id="sphereFill" cx="35%" cy="30%">
+              <stop offset="0%" stop-color="#FFFFFF" />
+              <stop offset="100%" stop-color="#EDF2F8" />
+            </radialGradient>
+          </defs>
+          <circle cx="150" cy="150" r="112" fill="url(#sphereFill)" stroke="#E8EAED" stroke-width="1" />
+          <ellipse cx="150" cy="150" rx="109.8" ry="39.2"  fill="none" stroke="#DDE4EC" stroke-width="1" />
+          <ellipse cx="150" cy="150" rx="109.8" ry="72.8"  fill="none" stroke="#DDE4EC" stroke-width="1" />
+          <ellipse cx="150" cy="150" rx="109.8" ry="100.8" fill="none" stroke="#DDE4EC" stroke-width="1" />
+          <g id="globePoints"></g>
+        </svg>
+        <div class="globe-tooltip" id="globeTooltip" aria-hidden="true"></div>
+        <p class="globe-empty" id="globeEmpty">Nothing yet. Turn the camera on and I'll start noticing things.</p>
+      </div>
+      <div class="legend">
+        <span><i style="background:#4A90E2"></i>Location</span>
+        <span><i style="background:#34A853"></i>Item</span>
+        <span><i style="background:#BD10E0"></i>Activity</span>
+      </div>
+    </section>
+
+    <!-- ───────── Watch (continuous observation) ───────── -->
+    <section class="card watch-card" aria-labelledby="watchHeading">
+      <div class="card-head">
+        <h2 id="watchHeading">Eyes</h2>
+        <span class="watch-state" id="watchState">Off</span>
+      </div>
+      <div class="viewport" id="viewport">
         <video id="video" playsinline muted autoplay></video>
         <canvas id="canvas" hidden></canvas>
-        <div class="viewport-empty" id="viewportEmpty">
+        <div class="viewport-placeholder" id="viewportPlaceholder">
           <p>Camera off</p>
-          <small>Turn it on so the agent can see what you're taking with you.</small>
+          <small>Turn it on and I'll keep watching — you don't have to ask each time.</small>
         </div>
-        <div class="scan-flash" id="scanFlash" aria-hidden="true"></div>
+        <div class="watch-badge" id="watchBadge" hidden><span class="watch-pip"></span>Watching</div>
       </div>
-      <div class="row">
-        <button id="cameraToggle" class="btn">Start camera</button>
-        <button id="flipCamera" class="btn ghost" hidden>Flip</button>
+      <div class="btn-row">
+        <button class="btn-primary" id="watchToggle">Start watching</button>
+        <button class="btn-secondary" id="flipCamera" hidden>Flip</button>
+      </div>
+      <p class="seen-line" id="seenLine"></p>
+    </section>
+
+    <!-- ───────── Workflow ───────── -->
+    <section class="workflow" id="workflow">
+      <h2 class="workflow-title" id="workflowTitle">Ready to listen</h2>
+      <p class="workflow-sub" id="workflowSub">Tap one thing below. I'll handle the rest.</p>
+    </section>
+
+    <!-- ───────── Globe details ───────── -->
+    <section class="globe-details" id="globeDetails" hidden>
+      <h2>Everything I've noticed</h2>
+      <div class="filters" role="group" aria-label="Filter observations">
+        <button class="pill selected" data-filter="all">All</button>
+        <button class="pill" data-filter="location">Location</button>
+        <button class="pill" data-filter="item">Item</button>
+        <button class="pill" data-filter="activity">Activity</button>
+      </div>
+      <div id="obsList" class="obs-list"></div>
+    </section>
+
+    <!-- ───────── Agent response ───────── -->
+    <section class="card response" id="response" hidden aria-live="polite">
+      <p class="answer" id="answer"></p>
+      <div class="details" id="details" hidden></div>
+      <div class="btn-row">
+        <button class="btn-got-it" id="gotIt">Got it</button>
+        <button class="btn-secondary" id="toggleDetails" hidden>Details</button>
       </div>
     </section>
 
-    <!-- ---------- Talk to it ---------- -->
-    <section class="card">
-      <div class="card-head">
-        <h2>Say something</h2>
-        <span class="hint" id="listenHint"></span>
-      </div>
+    <!-- ───────── Quick actions ───────── -->
+    <nav class="quick" aria-label="Quick actions">
+      <span class="quick-label">Quick actions</span>
+      <button class="quick-btn" data-action="leave">I'm heading out</button>
+      <button class="quick-btn" data-action="recall">Where is…?</button>
+      <button class="quick-btn" data-action="timeline">What did I do today?</button>
+    </nav>
+  </main>
 
-      <div class="quick">
-        <button class="chip" data-say="I'm going to work">I'm going to work</button>
-        <button class="chip" data-say="Where are my AirPods?">Where are my AirPods?</button>
-        <button class="chip" data-say="What did I do today?">What did I do today?</button>
-      </div>
-
-      <form class="composer" id="composer">
-        <button type="button" id="micBtn" class="mic" aria-label="Hold to speak">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z" fill="currentColor"/>
-            <path d="M19 12a7 7 0 0 1-14 0M12 19v3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- ───────── Voice bar ───────── -->
+  <footer class="voicebar">
+    <div class="mic-row">
+      <div class="mic-holder">
+        <span class="mic-halo" id="micHalo" aria-hidden="true"></span>
+        <button class="mic" id="micBtn" aria-label="Talk to Omnistant" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v4" />
           </svg>
         </button>
-        <input id="input" type="text" placeholder="Type, or tap the mic…" autocomplete="off" />
-        <button type="submit" class="btn primary" id="sendBtn">Send</button>
-      </form>
-    </section>
-
-    <!-- ---------- Conversation ---------- -->
-    <section class="card">
-      <div class="card-head">
-        <h2>Conversation</h2>
-        <label class="toggle">
-          <input type="checkbox" id="speakToggle" checked />
-          <span>speak replies</span>
-        </label>
       </div>
-      <div class="transcript" id="transcript" aria-live="polite">
-        <p class="placeholder">Nothing yet. Tell it you're heading out.</p>
+      <div class="voice-text">
+        <span class="voice-status" id="voiceStatus">Voice</span>
+        <span class="voice-transcript" id="voiceTranscript">Tap to talk, or just type below.</span>
       </div>
-    </section>
-
-    <!-- ---------- What it knows ---------- -->
-    <section class="card">
-      <div class="card-head">
-        <h2>What it knows</h2>
-        <button class="btn ghost small" id="refreshState">Refresh</button>
-      </div>
-      <div class="tabs" role="tablist">
-        <button class="tab active" data-tab="observations" role="tab">Observations</button>
-        <button class="tab" data-tab="routines" role="tab">Routines</button>
-      </div>
-      <div class="tabpanel" id="panel-observations"><p class="placeholder">No observations yet.</p></div>
-      <div class="tabpanel" id="panel-routines" hidden><p class="placeholder">No routines learned yet.</p></div>
-    </section>
-  </main>
+      <div class="speak-bars" id="speakBars" hidden aria-hidden="true"><i></i><i></i><i></i></div>
+    </div>
+    <form class="composer" id="composer">
+      <input id="input" type="text" placeholder="…or type here" autocomplete="off" aria-label="Type a message" />
+      <button type="submit" class="btn-send" id="sendBtn">Send</button>
+    </form>
+  </footer>
 
   <script src="/static/camera.js"></script>
   <script src="/static/speech.js"></script>
+  <script src="/static/globe.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
