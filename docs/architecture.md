@@ -15,6 +15,22 @@ deterministic functions over the log, and the model's job is language.
 
 ---
 
+## The diagram
+
+![Architecture](images/architecture.png)
+
+Source: [`architecture.mmd`](architecture.mmd). Regenerate with:
+
+```bash
+npx -y @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/images/architecture.png -b white -w 1500 --scale 2
+```
+
+Two entry points is the point of the picture: the left-hand one is a person, the
+right-hand one is nobody at all. Both run the same workflows against the same
+log.
+
+---
+
 ## Request flow
 
 ```mermaid
