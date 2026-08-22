@@ -1,72 +1,71 @@
 graph TD
-    subgraph IN["ENTRY — a person"]
-        UI["📱 Web App · mobile-first<br/><b>Camera</b> · <b>Voice</b> · <b>Text</b>"]
-    end
-    subgraph AUTO["ENTRY — nobody present"]
-        SCHED["⏰ Cloud Scheduler<br/><small>08:00 weekdays · 21:00 daily</small>"]
-    end
+    %% ═══════════ THREE WAYS IN ═══════════
+    UI["📱 <b>You ask</b><br/><small>voice · text · wake word</small>"]
+    CAM["👁️ <b>It watches</b><br/><small>camera, continuously</small>"]
+    SCHED["⏰ <b>Nobody is there</b><br/><small>Cloud Scheduler</small>"]
 
-    API["① Cloud Run · FastAPI<br/><small>/api/chat &nbsp;·&nbsp; /api/tasks/*</small>"]
-    INTENT["② Intent Recognition<br/><small>rules first · Gemini only when unsure</small>"]
-    ADK["③ Google ADK Agent<br/><small>chooses among 8 tools</small>"]
+    API["<b>Cloud Run · FastAPI</b>"]
 
-    subgraph WF["④ WORKFLOWS — deterministic, not model-improvised"]
-        W1["<b>Leave Detection</b><br/><small>expected − visible = missing</small>"]
-        W2["<b>Item Recall</b><br/><small>confidence = base × method × ½^(age ÷ 6h)</small>"]
-        W3["<b>Daily Timeline</b><br/><small>narrates only logged events</small>"]
-    end
+    %% ═══════════ THREE PATHS ═══════════
+    ADK["🧠 <b>Google ADK Agent</b><br/><small>rules-first intent, then<br/>Gemini picks from 8 tools</small>"]
+    WATCH["👁️ <b>Watch loop</b><br/><small><b>appeared</b> · <b>left view</b><br/>no agent in the path</small>"]
+    TASKS["⏰ <b>Scheduled work</b><br/><small>pre-departure brief · drain reminders</small>"]
 
-    subgraph MODEL["⑤ MODEL"]
-        GEM["✨ Gemini 3.5 Flash<br/><small>the seeing and the wording —<br/><b>never the deciding</b></small>"]
+    subgraph WF["WORKFLOWS — deterministic, not model-improvised"]
+        W1["<b>Leave Detection</b>"]
+        W2["<b>Item Recall</b>"]
+        W3["<b>Daily Timeline</b>"]
     end
 
-    subgraph STATE["⑥ STATE — the agent's memory"]
-        PG[("🐘 <b>Cloud SQL · PostgreSQL</b><br/><small>observations — append-only<br/>routines · leave_scans<br/>ADK sessions + events</small>")]
-        RD[("⚡ <b>Redis</b><br/><small>camera frames · 15 min TTL<br/>session state · <i>optional</i></small>")]
-    end
+    GEM["✨ <b>Gemini 3.5 Flash</b><br/><small>the seeing and the wording —<br/><b>never the deciding</b></small>"]
 
-    subgraph OUTPUT["⑦ IT TELLS YOU"]
-        OUT["🔊 Spoken + on screen<br/><small>“You're missing your AirPods.”</small>"]
-        SLACK["💬 Slack — <b>unprompted</b><br/><small>“Before you leave for work…”</small>"]
-    end
+    PG[("🐘 <b>Cloud SQL · PostgreSQL</b> — the memory<br/><small>observations, append-only · routines · leave_scans<br/>pending_nudges · agent_marks · ADK sessions</small>")]
 
-    UI    -->|"frame sent WITH the turn"| API
+    SCREEN["🔊 <b>Spoken + on screen</b><br/><small>memory globe · day timeline</small>"]
+    SLACK["💬 <b>Slack</b><br/><small>“You left without your AirPods.<br/>Last seen: kitchen counter, 8:31.”</small>"]
+
+    %% ═══════════ FLOW ═══════════
+    UI    --> API
+    CAM   -->|"only frames that changed"| API
     SCHED -->|"POST + X-Task-Token"| API
-    API   --> INTENT --> ADK
-    API   -.->|"frame · 15 min"| RD
-    ADK   -->|"8 ADK tools"| WF
-    ADK   -->|"conversation survives restarts"| PG
 
-    W1 -->|"append what was seen<br/>↺ and learn the routine"| PG
-    W2 -->|"query sightings"| PG
-    W3 -->|"read the day"| PG
+    API --> ADK
+    API --> WATCH
+    API --> TASKS
 
-    ADK -.-> GEM
-    W1  -.->|"identify items in frame"| GEM
-    W3  -.->|"narrate, never invent"| GEM
+    ADK -->|"8 tools"| WF
+    WF  -->|"read and append"| PG
+    WATCH -->|"writes what it saw"| PG
+    ADK -->|"conversation survives restarts"| PG
 
-    W1 --> OUT
-    W2 --> OUT
-    W3 --> OUT
-    W1 --> SLACK
-    W3 --> SLACK
+    W1 ==>|"something missing ⇒<br/><b>queue a reminder</b>"| PG
+    PG ==>|"due — and <b>still</b> missing?"| TASKS
 
+    ADK   -.-> GEM
+    WATCH -.-> GEM
+    WF    -.->|"see · narrate, never invent"| GEM
+
+    WF    --> SCREEN
+    WATCH --> SCREEN
+    TASKS --> SLACK
+
+    %% ═══════════ STYLE ═══════════
     classDef agent  fill:#4285F4,stroke:#1a56c4,color:#fff
+    classDef watch  fill:#0B8043,stroke:#075c30,color:#fff
     classDef gemini fill:#886FBF,stroke:#5f4a8a,color:#fff
     classDef db     fill:#336791,stroke:#1f4260,color:#fff
-    classDef cache  fill:#DC382D,stroke:#96241c,color:#fff
     classDef cron   fill:#EA4335,stroke:#a52b21,color:#fff
     classDef slack  fill:#4A154B,stroke:#2d0c2e,color:#fff
     classDef flow   fill:#0F9D58,stroke:#0a6c3c,color:#fff
     classDef client fill:#F4B400,stroke:#a87d00,color:#1a1a1a
     classDef out    fill:#E8F0FE,stroke:#4285F4,color:#1a1a1a
-    class API,INTENT,ADK agent
+
+    class API,ADK agent
+    class WATCH,CAM watch
     class GEM gemini
     class PG db
-    class RD cache
-    class SCHED cron
+    class SCHED,TASKS cron
     class SLACK slack
     class W1,W2,W3 flow
     class UI client
-    class OUT out
-    linkStyle default stroke:#5f6b7a,stroke-width:1.6px
+    class SCREEN out
