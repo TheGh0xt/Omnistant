@@ -126,7 +126,10 @@ where decisions get made.** A tool never decides what is missing — it calls a
 workflow that computes it from the log. That is why the agent can't hallucinate
 a sighting.
 
-Full diagram: [`docs/architecture.md`](docs/architecture.md).
+![Architecture](docs/images/architecture.png)
+
+Full diagrams, including how it learns and how it degrades:
+[`docs/architecture.md`](docs/architecture.md).
 
 ---
 

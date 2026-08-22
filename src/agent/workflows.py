@@ -289,12 +289,6 @@ async def leave_detection(
     )
     if vision.available:
         await store.add_observations(observations)
-        for item in vision.items:
-            await cache.note_last_seen(
-                user_id, item.key,
-                {"location": origin, "at": now.isoformat(), "confidence": item.confidence,
-                 "method": "visual"},
-            )
         await store.record_leave_scan(
             user_id=user_id, routine_name=routine.routine_name,
             found_items=sorted(found_keys), missing_items=missing_keys,
