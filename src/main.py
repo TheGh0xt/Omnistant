@@ -343,12 +343,34 @@ async def api_session(session_id: str, user_id: str | None = None) -> dict[str, 
 # ---------------------------------------------------------------------------
 # Autonomous triggers (Cloud Scheduler)
 # ---------------------------------------------------------------------------
-@app.post("/api/tasks/morning-brief", dependencies=[Depends(require_task_token)])
-async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
-    """Unprompted: before the usual departure time, say what today needs.
+def _brief_window(typical_time: str | None) -> tuple[int, int] | None:
+    """Minutes-since-midnight window in which the brief is useful."""
+    if not typical_time:
+        return None
+    try:
+        hh, mm = str(typical_time).split(":")[:2]
+        departs = int(hh) * 60 + int(mm)
+    except (ValueError, TypeError):
+        return None
+    return max(0, departs - BRIEF_LEAD_MINUTES), departs
 
-    Runs with no user in the loop. Reports what the work routine expects and
-    which of those things the agent has not seen recently enough to vouch for.
+
+# The brief is worth sending in the run-up to leaving, not at a fixed hour. This
+# is how long before the learned departure time the window opens.
+BRIEF_LEAD_MINUTES = 25
+
+
+@app.post("/api/tasks/morning-brief", dependencies=[Depends(require_task_token)])
+async def task_morning_brief(user_id: str | None = None, force: bool = False) -> dict[str, Any]:
+    """Unprompted: shortly before you usually leave, say what today needs.
+
+    Called on a cadence rather than at a fixed hour, and fires only inside a
+    window ending at the departure time this routine has actually been observed
+    to happen at. A brief pinned to 08:00 lands 45 minutes early for someone who
+    leaves at 08:45, and lands after the fact on a day they leave at 07:30 —
+    which makes it noise, and noise gets muted.
+
+    `force=true` bypasses the window, for demos and manual checks.
     """
     uid = _user(user_id)
     store = get_store()
@@ -356,6 +378,25 @@ async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
     primary = next((r for r in routines if r.routine_name in {"work", "office"}), None)
     if primary is None:
         return {"triggered": True, "message": "No work routine learned yet — nothing to brief on."}
+
+    local_now = datetime.now(tz())
+    if not force:
+        window = _brief_window(primary.typical_time)
+        if window is None:
+            return {"triggered": False, "skipped": "no departure time learned yet"}
+        opens, closes = window
+        minutes_now = local_now.hour * 60 + local_now.minute
+        if not (opens <= minutes_now <= closes):
+            return {
+                "triggered": False,
+                "skipped": "outside the departure window",
+                "window": f"{opens // 60:02d}:{opens % 60:02d}-{closes // 60:02d}:{closes % 60:02d}",
+                "now": local_now.strftime("%H:%M"),
+            }
+        # Ticking every 15 minutes means the window is hit more than once; the
+        # claim is what stops that becoming two notifications.
+        if not await store.claim_daily_mark(uid, "morning-brief", local_now.date()):
+            return {"triggered": False, "skipped": "already briefed today"}
 
     unverified: list[dict[str, Any]] = []
     for item in primary.expected_items:
@@ -419,6 +460,10 @@ async def task_drain_nudges() -> dict[str, Any]:
         scanned_at = payload.get("scanned_at")
         still_missing: list[str] = []
 
+        # Where each thing was last seen, so the reminder is actionable. We are
+        # already running this query to decide whether to send at all; throwing
+        # the location away made the user turn back blind.
+        last_seen: list[str] = []
         for item in payload.get("missing", []):
             recall = await item_recall(user_id=nudge["user_id"], item=item, limit=1)
             seen_since = (
@@ -426,8 +471,14 @@ async def task_drain_nudges() -> dict[str, Any]:
                 and scanned_at
                 and recall.sightings[0].at.isoformat() > scanned_at
             )
-            if not seen_since:
-                still_missing.append(item)
+            if seen_since:
+                continue
+            still_missing.append(item)
+            if recall.found:
+                sighting = recall.sightings[0]
+                where = ", ".join(filter(None, [sighting.location, sighting.detail]))
+                if where:
+                    last_seen.append(f"{humanize_items([item])} — {where}, {sighting.time_str}")
 
         if not still_missing:
             await store.close_nudge(nudge["id"], sent=False)
@@ -450,7 +501,11 @@ async def task_drain_nudges() -> dict[str, Any]:
                     f"You headed to {payload.get('routine', 'out')} {when} without your "
                     f"{names}. Still close enough to turn back?"
                 ),
-                facts=[("Missing", names), ("Left from", payload.get("origin", "home"))],
+                facts=(
+                    [("Missing", names)]
+                    + ([("Last seen", "\n".join(last_seen))] if last_seen else [])
+                    + [("Left from", payload.get("origin", "home"))]
+                ),
                 urgent=True,
             )
         )

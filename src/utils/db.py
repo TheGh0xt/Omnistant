@@ -131,6 +131,7 @@ class Store:
     ) -> str: ...
     async def due_nudges(self, now: datetime, limit: int = 20) -> list[dict[str, Any]]: ...
     async def close_nudge(self, nudge_id: str, *, sent: bool) -> None: ...
+    async def claim_daily_mark(self, user_id: str, key: str, day: Any) -> bool: ...
     async def recent_leave_scans(self, user_id: str, limit: int = 10) -> list[dict[str, Any]]: ...
 
 
@@ -401,6 +402,21 @@ class PostgresStore(Store):
         ]
 
 
+    async def claim_daily_mark(self, user_id: str, key: str, day: Any) -> bool:
+        """Claim a once-per-day action. True only for the caller that got there first."""
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO agent_marks (user_id, mark_key, marked_on)
+                    VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+                    """,
+                    (user_id, key, day),
+                )
+                claimed = cur.rowcount == 1
+            await conn.commit()
+        return claimed
+
     async def enqueue_nudge(
         self, user_id: str, kind: str, due_at: datetime, payload: dict[str, Any]
     ) -> str:
@@ -468,6 +484,7 @@ class MemoryStore(Store):
         self._routines: dict[tuple[str, str], Routine] = {}
         self._scans: list[dict[str, Any]] = []
         self._nudges: list[dict[str, Any]] = []
+        self._marks: set[tuple[str, str, str]] = set()
 
     async def connect(self) -> None:
         log.warning("DATABASE_URL unset — using in-memory store (data is lost on restart)")
@@ -539,6 +556,13 @@ class MemoryStore(Store):
         record = _leave_scan_record(kw)
         self._scans.append(record)
         return record
+
+    async def claim_daily_mark(self, user_id: str, key: str, day: Any) -> bool:
+        token = (user_id, key, str(day))
+        if token in self._marks:
+            return False
+        self._marks.add(token)
+        return True
 
     async def enqueue_nudge(
         self, user_id: str, kind: str, due_at: datetime, payload: dict[str, Any]

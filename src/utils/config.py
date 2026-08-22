@@ -73,9 +73,13 @@ class Config:
     recall_stale_after_hours: float = float(os.getenv("RECALL_STALE_AFTER_HOURS", "6"))
 
     # How long after you say you're leaving to send the follow-up reminder.
-    # Long enough that you have actually gone, short enough that turning back
-    # is still cheap. A fixed morning brief assumes a fixed departure time.
-    leave_nudge_delay_minutes: float = float(os.getenv("LEAVE_NUDGE_DELAY_MINUTES", "5"))
+    #
+    # Two minutes, not five. The value of this reminder decays with distance:
+    # five minutes on foot is ~400m and still an easy turn-back; five minutes
+    # driving is ~3km and no longer is. The cost of arriving slightly early is a
+    # glance at a phone; the cost of arriving late is losing the thing for the
+    # day. So it errs early.
+    leave_nudge_delay_minutes: float = float(os.getenv("LEAVE_NUDGE_DELAY_MINUTES", "2"))
 
     @property
     def genai_available(self) -> bool:

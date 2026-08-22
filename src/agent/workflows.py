@@ -337,6 +337,20 @@ async def _refine_routine(store: Store, user_id: str, routine: Routine) -> None:
     scans = await store.recent_leave_scans(user_id, limit=8)
     relevant = [s for s in scans if s["routine_name"] == routine.routine_name]
     routine.times_observed = len(relevant)
+
+    # Learn when this trip actually happens. A seeded "08:45" that never updates
+    # is a guess; the median of the last few departures is a fact, and it is what
+    # decides when the pre-departure brief is worth sending.
+    if len(relevant) >= 2:
+        local = tz()
+        minutes = sorted(
+            s["scanned_at"].astimezone(local).hour * 60 + s["scanned_at"].astimezone(local).minute
+            for s in relevant
+            if s.get("scanned_at")
+        )
+        if minutes:
+            median = minutes[len(minutes) // 2]
+            routine.typical_time = f"{median // 60:02d}:{median % 60:02d}"
     if len(relevant) >= 3:
         counts: dict[str, int] = {}
         for scan in relevant:
