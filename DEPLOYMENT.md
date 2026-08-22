@@ -87,7 +87,7 @@ tier's direct connection limit is low.
 
 | Resource | Name (default) | Why |
 |---|---|---|
-| Cloud Run service | `personal-context-agent` | the app |
+| Cloud Run service | `omnistant` | the app |
 | Cloud SQL (PG 16) | `omnistant-pg`, `db-f1-micro`, **ENTERPRISE edition** | the observation log |
 | Secrets | `gemini-api-key`, `omnistant-task-token`, `omnistant-database-url`, `omnistant-db-password` | credentials |
 | Secret | `omnistant-slack-webhook` — only if `SLACK_WEBHOOK_URL` is set | where the jobs deliver |
@@ -148,7 +148,7 @@ logs a warning and falls back to in-memory rather than refusing to boot. Check
 which backend is live:
 
 ```bash
-gcloud run services logs read personal-context-agent --region=us-central1 \
+gcloud run services logs read omnistant --region=us-central1 \
   | grep "agent engine ready"
 # ... "sessions": "postgres"
 ```
@@ -174,7 +174,7 @@ To rotate any of them, add a new secret version and redeploy:
 
 ```bash
 printf '%s' 'new-value' | gcloud secrets versions add omnistant-database-url --data-file=-
-gcloud run services update personal-context-agent --region=us-central1
+gcloud run services update omnistant --region=us-central1
 ```
 
 ---
@@ -236,7 +236,7 @@ beyond a demo, put Identity-Aware Proxy in front of it or add real auth and drop
 ## Verifying a deployment
 
 ```bash
-URL=$(gcloud run services describe personal-context-agent \
+URL=$(gcloud run services describe omnistant \
         --region=us-central1 --format='value(status.url)')
 
 curl -s "$URL/healthz" | jq
@@ -263,11 +263,11 @@ Logs are structured JSON on stdout, so Cloud Logging promotes `severity` and
 `message` automatically.
 
 ```bash
-gcloud run services logs read personal-context-agent --region=us-central1 --limit=50
+gcloud run services logs read omnistant --region=us-central1 --limit=50
 
 # Just the leave scans
 gcloud logging read \
-  'resource.labels.service_name="personal-context-agent" AND jsonPayload.message="leave scan"' \
+  'resource.labels.service_name="omnistant" AND jsonPayload.message="leave scan"' \
   --limit=20 --format='value(jsonPayload.routine, jsonPayload.missing)'
 ```
 
@@ -301,7 +301,7 @@ only once you are running multiple instances with shared session state.
 **Tear it all down:**
 
 ```bash
-gcloud run services delete personal-context-agent --region=us-central1
+gcloud run services delete omnistant --region=us-central1
 gcloud sql instances delete omnistant-pg
 
 # Only if you deployed with USE_MEMORYSTORE=1:

@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.engine import get_engine, init_engine
+from agent.watch import observe_tick
 from agent.workflows import daily_timeline, item_recall, leave_detection
 from tools.vision import ImageDecodeError, decode_data_url
 from utils.cache import close_cache, get_cache, init_cache, new_session_id
@@ -81,6 +82,16 @@ class ChatRequest(BaseModel):
 class FrameRequest(BaseModel):
     session_id: str
     image: str = Field(description="Camera still as a `data:image/jpeg;base64,...` URL.")
+
+
+class ObserveRequest(BaseModel):
+    """One tick of the watch loop."""
+
+    session_id: str
+    frame: str = Field(description="Camera still as a `data:image/jpeg;base64,...` URL.")
+    user_id: str | None = None
+    location: str | None = None
+    spoken: str = Field(default="", description="What the user said while showing it, if anything.")
 
 
 class LeaveScanRequest(BaseModel):
@@ -201,6 +212,29 @@ async def upload_frame(req: FrameRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await get_cache().put_frame(req.session_id, req.image)
     return {"stored": True, "bytes": len(raw), "mime": mime}
+
+
+@app.post("/api/observe")
+async def api_observe(req: ObserveRequest) -> dict[str, Any]:
+    """One frame of continuous watching.
+
+    The client calls this only when the scene has actually changed, so this is
+    not a fixed-rate poll — a still desk costs nothing. Returns what is visible,
+    what just appeared, and what just left view.
+    """
+    try:
+        decode_data_url(req.frame)
+    except ImageDecodeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    tick = await observe_tick(
+        user_id=_user(req.user_id),
+        session_id=req.session_id,
+        frame_data_url=req.frame,
+        location=req.location,
+        spoken=req.spoken,
+    )
+    return tick.to_dict()
 
 
 # ---------------------------------------------------------------------------

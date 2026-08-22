@@ -1,7 +1,7 @@
 # Devpost submission — Omnistant
 
 **Category:** Taskmaster
-**Live:** https://personal-context-agent-3oe5odab6a-uc.a.run.app
+**Live:** https://omnistant-3oe5odab6a-uc.a.run.app
 **Repo:** https://github.com/TheGh0xt/Omnistant
 
 ---

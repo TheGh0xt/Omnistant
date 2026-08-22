@@ -21,7 +21,7 @@ export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 # --- Configuration ---------------------------------------------------------
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-personal-context-agent}"
+SERVICE="${SERVICE:-omnistant}"
 SQL_INSTANCE="${SQL_INSTANCE:-omnistant-pg}"
 # Shared-core, ENTERPRISE edition. db-g1-small if f1-micro feels tight.
 SQL_TIER="${SQL_TIER:-db-f1-micro}"
