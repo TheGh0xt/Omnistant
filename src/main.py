@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from agent.engine import get_engine, init_engine
 from agent.watch import observe_tick
-from agent.workflows import daily_timeline, item_recall, leave_detection
+from agent.workflows import daily_timeline, humanize_items, item_recall, leave_detection
 from tools.vision import ImageDecodeError, decode_data_url
 from utils.cache import close_cache, get_cache, init_cache, new_session_id
 from utils.config import get_config, tz
@@ -394,6 +394,72 @@ async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
         "expected_items": primary.expected_items, "unverified": unverified,
         "message": message, "delivered": delivered,
     }
+
+
+@app.post("/api/tasks/drain-nudges", dependencies=[Depends(require_task_token)])
+async def task_drain_nudges() -> dict[str, Any]:
+    """Deliver reminders that have come due.
+
+    Cloud Run scales to zero, so a delayed reminder cannot be a sleeping task —
+    it is a row with a due time, and this drains whatever has matured. Run it
+    every few minutes.
+
+    Each nudge is re-checked before it is sent. If the agent has seen the item
+    since the scan that raised it, the reminder is cancelled rather than
+    delivered: telling someone they forgot the keys they are holding is exactly
+    the kind of noise that gets an assistant muted.
+    """
+    store = get_store()
+    now = datetime.now(timezone.utc)
+    due = await store.due_nudges(now)
+
+    sent, cancelled = 0, 0
+    for nudge in due:
+        payload = nudge.get("payload") or {}
+        scanned_at = payload.get("scanned_at")
+        still_missing: list[str] = []
+
+        for item in payload.get("missing", []):
+            recall = await item_recall(user_id=nudge["user_id"], item=item, limit=1)
+            seen_since = (
+                recall.found
+                and scanned_at
+                and recall.sightings[0].at.isoformat() > scanned_at
+            )
+            if not seen_since:
+                still_missing.append(item)
+
+        if not still_missing:
+            await store.close_nudge(nudge["id"], sent=False)
+            cancelled += 1
+            continue
+
+        names = humanize_items(still_missing)
+        # Elapsed time comes from the scan, not the configured delay: the drain
+        # runs on a cadence, so the real gap is whatever it actually was.
+        try:
+            elapsed = int((now - datetime.fromisoformat(scanned_at)).total_seconds() // 60)
+        except (TypeError, ValueError):
+            elapsed = int(cfg.leave_nudge_delay_minutes)
+        when = "just now" if elapsed < 1 else f"about {elapsed} minute{'s' if elapsed != 1 else ''} ago"
+
+        await get_notifier().send(
+            Notification(
+                title="You left without something",
+                body=(
+                    f"You headed to {payload.get('routine', 'out')} {when} without your "
+                    f"{names}. Still close enough to turn back?"
+                ),
+                facts=[("Missing", names), ("Left from", payload.get("origin", "home"))],
+                urgent=True,
+            )
+        )
+        await store.close_nudge(nudge["id"], sent=True)
+        sent += 1
+
+    if due:
+        log.info("nudges drained", extra={"due": len(due), "sent": sent, "cancelled": cancelled})
+    return {"triggered": True, "due": len(due), "sent": sent, "cancelled": cancelled}
 
 
 @app.post("/api/tasks/evening-recap", dependencies=[Depends(require_task_token)])

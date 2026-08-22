@@ -47,7 +47,7 @@
     watching: false, lastApiAt: 0, tickTimer: null, pausedUntil: 0,
     observations: [], filter: 'all',
     revealTimer: null, detailRows: [],
-    timeline: [], timelineTotal: 0, tlSelected: 0, wake: false
+    timeline: [], timelineTotal: 0, tlSelected: 0, wake: false, heardTimer: null
   };
 
   var RESTING_HINT = 'Tap to talk, or just type below.';
@@ -361,6 +361,19 @@
 
   /* ───────── wake word ───────── */
   var wake = new WakeWord({
+    // Show what the recogniser actually heard while in standby. Without this,
+    // a wake word that isn't firing is indistinguishable from a microphone that
+    // isn't working, and there is no way to tell whether you said it wrong.
+    onHeard: function (text) {
+      if (state.busy || !state.wake) { return; }
+      els.voiceTranscript.textContent = '“' + text + '”';
+      clearTimeout(state.heardTimer);
+      state.heardTimer = setTimeout(function () {
+        if (state.wake && !state.busy) {
+          els.voiceTranscript.textContent = 'Say “Hey Omni”, or tap to talk.';
+        }
+      }, 2500);
+    },
     onWake: function () {
       // The trigger stream is tuned for two words; hand the floor to the real
       // recogniser for the actual command.
@@ -383,7 +396,14 @@
     els.wakeLabel.textContent = on
       ? 'Wake word on — always listening'
       : 'Wake word off — tap to talk';
-    if (on) { wake.enable(); } else { wake.disable(); els.micHalo.classList.remove('standby'); }
+    if (on) {
+      wake.enable();
+      els.voiceTranscript.textContent = 'Say “Hey Omni”, or tap to talk.';
+    } else {
+      wake.disable();
+      els.micHalo.classList.remove('standby');
+      els.voiceTranscript.textContent = RESTING_HINT;
+    }
     setAgentStatus(on ? 'Standing by' : (state.watching ? 'Watching' : 'Ready'));
   }
 

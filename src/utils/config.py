@@ -72,6 +72,11 @@ class Config:
     # agent starts hedging in its recall answer.
     recall_stale_after_hours: float = float(os.getenv("RECALL_STALE_AFTER_HOURS", "6"))
 
+    # How long after you say you're leaving to send the follow-up reminder.
+    # Long enough that you have actually gone, short enough that turning back
+    # is still cheap. A fixed morning brief assumes a fixed departure time.
+    leave_nudge_delay_minutes: float = float(os.getenv("LEAVE_NUDGE_DELAY_MINUTES", "5"))
+
     @property
     def genai_available(self) -> bool:
         """True when we can actually reach a Gemini model."""

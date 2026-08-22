@@ -126,6 +126,11 @@ class Store:
     async def upsert_routine(self, routine: Routine) -> Routine: ...
 
     async def record_leave_scan(self, **kwargs: Any) -> dict[str, Any]: ...
+    async def enqueue_nudge(
+        self, user_id: str, kind: str, due_at: datetime, payload: dict[str, Any]
+    ) -> str: ...
+    async def due_nudges(self, now: datetime, limit: int = 20) -> list[dict[str, Any]]: ...
+    async def close_nudge(self, nudge_id: str, *, sent: bool) -> None: ...
     async def recent_leave_scans(self, user_id: str, limit: int = 10) -> list[dict[str, Any]]: ...
 
 
@@ -396,6 +401,49 @@ class PostgresStore(Store):
         ]
 
 
+    async def enqueue_nudge(
+        self, user_id: str, kind: str, due_at: datetime, payload: dict[str, Any]
+    ) -> str:
+        nudge_id = str(uuid.uuid4())
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO pending_nudges (id, user_id, kind, due_at, payload)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (nudge_id, user_id, kind, due_at, json.dumps(payload)),
+            )
+            await conn.commit()
+        return nudge_id
+
+    async def due_nudges(self, now: datetime, limit: int = 20) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT id, user_id, kind, due_at, payload
+                    FROM pending_nudges
+                    WHERE sent_at IS NULL AND cancelled_at IS NULL AND due_at <= %s
+                    ORDER BY due_at
+                    LIMIT %s
+                    """,
+                    (now, limit),
+                )
+                rows = await cur.fetchall()
+        return [
+            {"id": str(r[0]), "user_id": str(r[1]), "kind": r[2], "due_at": r[3], "payload": r[4] or {}}
+            for r in rows
+        ]
+
+    async def close_nudge(self, nudge_id: str, *, sent: bool) -> None:
+        column = "sent_at" if sent else "cancelled_at"
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                f"UPDATE pending_nudges SET {column} = now() WHERE id = %s", (nudge_id,)
+            )
+            await conn.commit()
+
+
 def _leave_scan_record(kw: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": kw.get("id") or str(uuid.uuid4()),
@@ -419,6 +467,7 @@ class MemoryStore(Store):
         self._obs: list[Observation] = []
         self._routines: dict[tuple[str, str], Routine] = {}
         self._scans: list[dict[str, Any]] = []
+        self._nudges: list[dict[str, Any]] = []
 
     async def connect(self) -> None:
         log.warning("DATABASE_URL unset — using in-memory store (data is lost on restart)")
@@ -490,6 +539,29 @@ class MemoryStore(Store):
         record = _leave_scan_record(kw)
         self._scans.append(record)
         return record
+
+    async def enqueue_nudge(
+        self, user_id: str, kind: str, due_at: datetime, payload: dict[str, Any]
+    ) -> str:
+        nudge_id = str(uuid.uuid4())
+        self._nudges.append({
+            "id": nudge_id, "user_id": user_id, "kind": kind,
+            "due_at": due_at, "payload": payload, "sent_at": None, "cancelled_at": None,
+        })
+        return nudge_id
+
+    async def due_nudges(self, now: datetime, limit: int = 20) -> list[dict[str, Any]]:
+        due = [
+            n for n in self._nudges
+            if n["sent_at"] is None and n["cancelled_at"] is None and n["due_at"] <= now
+        ]
+        due.sort(key=lambda n: n["due_at"])
+        return due[:limit]
+
+    async def close_nudge(self, nudge_id: str, *, sent: bool) -> None:
+        for n in self._nudges:
+            if n["id"] == nudge_id:
+                n["sent_at" if sent else "cancelled_at"] = utcnow()
 
     async def recent_leave_scans(self, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
         hits = [s for s in self._scans if s["user_id"] == user_id]

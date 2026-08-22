@@ -73,6 +73,11 @@ def _display(name: str) -> str:
     return " ".join(_BRAND_CASE.get(word, word) for word in (name or "").split())
 
 
+def humanize_items(keys: Sequence[str]) -> str:
+    """Render normalised item keys the way a person says them: 'AirPods and keys'."""
+    return _humanize_list([_display(k) for k in keys])
+
+
 # ===========================================================================
 # Workflow 1 — Leave detection
 # ===========================================================================
@@ -297,6 +302,22 @@ async def leave_detection(
             scanned_at=now,
         )
         await _refine_routine(store, user_id, routine)
+
+        # A reminder is only useful if it arrives when you can still act on it.
+        # Telling someone at 08:00 that they might forget their keys is a
+        # forecast; telling them five minutes after they walked out is a rescue.
+        if missing_keys:
+            await store.enqueue_nudge(
+                user_id=user_id,
+                kind="left_without",
+                due_at=now + timedelta(minutes=get_config().leave_nudge_delay_minutes),
+                payload={
+                    "routine": routine.routine_name,
+                    "missing": missing_keys,
+                    "origin": origin,
+                    "scanned_at": now.isoformat(),
+                },
+            )
 
     log.info(
         "leave scan",

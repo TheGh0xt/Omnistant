@@ -335,8 +335,9 @@
    */
   function WakeWord(opts) {
     opts = opts || {};
-    this.phrases = opts.phrases || ['hey omni', 'hey omnistant', 'ok omni'];
+    this.pattern = opts.pattern || WakeWord.DEFAULT_PATTERN;
     this.onWake = opts.onWake || function () {};
+    this.onHeard = opts.onHeard || function () {};
     this.onStateChange = opts.onStateChange || function () {};
     this.onError = opts.onError || function () {};
     this.enabled = false;
@@ -348,14 +349,23 @@
 
   WakeWord.MAX_FAILURES = 5;
 
+  /* "Omni" is an invented word, so speech recognition never returns it the same
+   * way twice — "omny", "omnie", "on me", "omani" are all things it produces for
+   * the same sound. Matching an exact string means the wake word simply does not
+   * work, which is what happened. Match a greeting followed by anything that
+   * sounds like it instead, and accept the full product name on its own because
+   * it is distinctive enough not to fire by accident. */
+  WakeWord.DEFAULT_PATTERN =
+    /\b(?:hey|hi|hello|ok|okay|yo)\s+(?:omni\w*|omn\w+|omany|ohmni|amani|on\s?me|almighty)\b|\bomnistant\b/;
+
   WakeWord.prototype.isSupported = function () { return !!Recognition; };
 
   WakeWord.prototype._matches = function (text) {
-    var heard = text.toLowerCase().replace(/[^a-z\s]/g, ' ');
-    for (var i = 0; i < this.phrases.length; i++) {
-      if (heard.indexOf(this.phrases[i]) !== -1) { return true; }
-    }
-    return false;
+    // Collapsing whitespace matters: stripping the comma out of "Hey, Omni!"
+    // leaves a double space, and an exact substring match then fails on one of
+    // the most likely transcriptions there is.
+    var heard = String(text).toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    return this.pattern.test(heard);
   };
 
   WakeWord.prototype._build = function () {
@@ -370,6 +380,7 @@
       if (self.suspended) { return; }
       for (var i = event.resultIndex; i < event.results.length; i++) {
         var text = event.results[i][0].transcript || '';
+        if (text.trim()) { self.onHeard(text.trim()); }
         if (self._matches(text)) {
           self.failures = 0;
           // Hand the floor to the real recogniser rather than trying to parse
