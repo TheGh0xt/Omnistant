@@ -58,6 +58,11 @@ class Config:
     # --- Serving ------------------------------------------------------------
     port: int = int(os.getenv("PORT", "8080"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    # Where the autonomous jobs deliver their results. Without this the agent
+    # still runs on schedule, but nobody ever sees what it worked out.
+    # Slack: https://api.slack.com/apps -> Incoming Webhooks.
+    slack_webhook_url: str | None = os.getenv("SLACK_WEBHOOK_URL")
+
     # Shared secret required by /api/tasks/* so Cloud Scheduler can call them
     # but the open internet cannot.  Unset => task endpoints are open (dev only).
     task_token: str | None = os.getenv("TASK_TOKEN")
@@ -87,6 +92,7 @@ class Config:
             "gemini": "live" if self.genai_available else "stub (no credentials)",
             "gemini_backend": "vertex-ai" if self.use_vertex else "google-ai-studio",
             "postgres": "live" if self.postgres_enabled else "in-memory fallback",
+            "notifications": "slack" if self.slack_webhook_url else "none",
             "redis": "live" if self.redis_enabled else "in-process fallback",
         }
 

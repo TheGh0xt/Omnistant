@@ -1,0 +1,80 @@
+graph TD
+    %% ═══════════ ENTRY POINTS ═══════════
+    subgraph IN["ENTRY — a person"]
+        UI["📱 Web App · mobile-first<br/><b>Camera</b> · <b>Voice</b> · <b>Text</b>"]
+    end
+
+    subgraph AUTO["ENTRY — nobody present"]
+        SCHED["⏰ Cloud Scheduler<br/><small>08:00 weekdays · 21:00 daily</small>"]
+    end
+
+    %% ═══════════ AGENT PIPELINE ═══════════
+    API["① Cloud Run · FastAPI<br/><small>/api/chat &nbsp;·&nbsp; /api/tasks/*</small>"]
+    INTENT["② Intent Recognition<br/><small>rules first · Gemini only when unsure</small>"]
+    ADK["③ Google ADK Agent<br/><small>chooses among 8 tools</small>"]
+
+    subgraph WF["④ WORKFLOWS — deterministic, not model-improvised"]
+        W1["<b>Leave Detection</b><br/><small>expected − visible = missing</small>"]
+        W2["<b>Item Recall</b><br/><small>confidence decays with age</small>"]
+        W3["<b>Daily Timeline</b><br/><small>narrates only logged events</small>"]
+    end
+
+    %% ═══════════ BOTTOM ROW ═══════════
+    subgraph MODEL["⑤ MODEL — does the seeing and the wording, never the deciding"]
+        GEM["✨ Gemini 3.5 Flash<br/><small>vision · language · tool choice</small>"]
+    end
+
+    subgraph STATE["⑥ STATE — the agent's memory"]
+        PG[("🐘 <b>Cloud SQL · PostgreSQL</b><br/><small>observations — append-only<br/>routines · leave_scans<br/>ADK sessions + events</small>")]
+        RD[("⚡ <b>Redis</b><br/><small>frames · last-seen<br/><i>optional</i></small>")]
+    end
+
+    subgraph OUTPUT["⑦ IT TELLS YOU"]
+        OUT["🔊 Spoken + on screen<br/><small>“You're missing your AirPods.”</small>"]
+        SLACK["💬 Slack<br/><small>“Before you leave for work…”</small>"]
+    end
+
+    %% ═══════════ FLOW ═══════════
+    UI    -->|"frame sent WITH the turn"| API
+    SCHED -->|"POST + X-Task-Token"| API
+    API   --> INTENT --> ADK
+    ADK   -->|"8 ADK tools"| WF
+    ADK   -->|"conversation survives restarts"| PG
+
+    W1 -->|"append what was seen · learn the routine"| PG
+    W2 -->|"query sightings"| PG
+    W3 -->|"read the day"| PG
+
+    ADK -.->|"reason · pick tool"| GEM
+    W1  -.->|"identify items in frame"| GEM
+    W3  -.->|"narrate, never invent"| GEM
+    W1  -.-> RD
+
+    W1 --> OUT
+    W2 --> OUT
+    W3 --> OUT
+    W1 ==>|"unprompted"| SLACK
+    W3 ==>|"unprompted"| SLACK
+
+    %% ═══════════ STYLE ═══════════
+    classDef agent  fill:#4285F4,stroke:#1a56c4,color:#fff
+    classDef gemini fill:#886FBF,stroke:#5f4a8a,color:#fff
+    classDef db     fill:#336791,stroke:#1f4260,color:#fff
+    classDef cache  fill:#DC382D,stroke:#96241c,color:#fff
+    classDef cron   fill:#EA4335,stroke:#a52b21,color:#fff
+    classDef slack  fill:#4A154B,stroke:#2d0c2e,color:#fff
+    classDef flow   fill:#0F9D58,stroke:#0a6c3c,color:#fff
+    classDef client fill:#F4B400,stroke:#a87d00,color:#1a1a1a
+    classDef out    fill:#E8F0FE,stroke:#4285F4,color:#1a1a1a
+
+    class API,INTENT,ADK agent
+    class GEM gemini
+    class PG db
+    class RD cache
+    class SCHED cron
+    class SLACK slack
+    class W1,W2,W3 flow
+    class UI client
+    class OUT out
+
+    linkStyle default stroke:#5f6b7a,stroke-width:1.6px

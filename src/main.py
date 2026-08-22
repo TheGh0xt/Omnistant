@@ -29,6 +29,7 @@ from utils.config import get_config, tz
 from utils.db import Routine, close_store, get_store, init_store, normalize_subject
 from utils.errors import ModelQuotaError
 from utils.logger import configure_logging, get_logger
+from utils.notify import Notification, get_notifier, init_notifier
 
 cfg = get_config()
 configure_logging(cfg.log_level)
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
     await init_store()
     await init_cache()
     init_engine()
+    init_notifier()
     log.info("service ready", extra=cfg.report())
     yield
     await close_store()
@@ -122,14 +124,35 @@ def require_task_token(x_task_token: str | None = Header(default=None)) -> None:
 @app.get("/health")
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
-    """Liveness + dependency status. Cloud Run's health check hits this."""
-    store_ok = await get_store().healthy()
-    cache_ok = await get_cache().healthy()
+    """Liveness + dependency status. Cloud Run's health check hits this.
+
+    Reports the backend actually in use, not just whether it answered. An
+    in-process fallback always answers "healthy", so reporting a bare "up" would
+    tell an operator that Redis is running when nothing was ever provisioned.
+    """
+    store = get_store()
+    cache = get_cache()
+    store_ok = await store.healthy()
+    cache_ok = await cache.healthy()
+
+    def state(healthy: bool, kind: str, real: str) -> str:
+        if not healthy:
+            return "down"
+        return "up" if kind == real else f"fallback ({kind})"
+
+    postgres = state(store_ok, store.kind, "postgres")
+    redis = state(cache_ok, cache.kind, "redis")
+    # A fallback is not a failure, but it is not full health either: nothing
+    # written to an in-memory store survives the next cold start.
+    degraded = not (store_ok and cache_ok) or "fallback" in postgres
+
     return {
-        "status": "ok" if store_ok and cache_ok else "degraded",
-        "postgres": "up" if store_ok else "down",
-        "redis": "up" if cache_ok else "down",
+        "status": "degraded" if degraded else "ok",
+        "postgres": postgres,
+        "redis": redis,
+        "sessions": get_engine().session_backend,
         "gemini": "configured" if cfg.genai_available else "missing credentials",
+        "notifications": "slack" if cfg.slack_webhook_url else "none",
         "model": cfg.model,
         "timezone": str(tz()),
     }
@@ -312,10 +335,30 @@ async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
     else:
         message = f"Everything you normally take to {primary.routine_name} was seen recently."
 
-    log.info("morning brief", extra={"user_id": uid, "unverified": [u["item"] for u in unverified]})
+    # Deliver it. A result that only exists in a JSON response is not an action
+    # taken — nobody is watching this endpoint when it fires at 08:00.
+    delivered = await get_notifier().send(
+        Notification(
+            title=f"Before you leave for {primary.routine_name}",
+            body=message,
+            facts=(
+                [("Can't vouch for", ", ".join(u["item"] for u in unverified)),
+                 ("Usually taken", ", ".join(primary.expected_items))]
+                if unverified
+                else [("Usually taken", ", ".join(primary.expected_items))]
+            ),
+            urgent=bool(unverified),
+        )
+    )
+
+    log.info(
+        "morning brief",
+        extra={"user_id": uid, "unverified": [u["item"] for u in unverified], "delivered": delivered},
+    )
     return {
         "triggered": True, "routine": primary.routine_name,
-        "expected_items": primary.expected_items, "unverified": unverified, "message": message,
+        "expected_items": primary.expected_items, "unverified": unverified,
+        "message": message, "delivered": delivered,
     }
 
 
@@ -324,8 +367,27 @@ async def task_evening_recap(user_id: str | None = None) -> dict[str, Any]:
     """Unprompted: at the end of the day, reconstruct it and surface loose ends."""
     uid = _user(user_id)
     timeline = await daily_timeline(user_id=uid)
-    log.info("evening recap", extra={"user_id": uid, "entries": len(timeline.entries)})
-    return {"triggered": True} | timeline.to_dict()
+
+    delivered = False
+    if timeline.entries:
+        # An empty day is not worth a notification; the log speaks for itself.
+        places = [e.location for e in timeline.entries if e.location]
+        delivered = await get_notifier().send(
+            Notification(
+                title="Your day",
+                body=timeline.narrative,
+                facts=[
+                    ("Observations", str(len(timeline.entries))),
+                    ("Places", ", ".join(dict.fromkeys(places)) or "none recorded"),
+                ],
+            )
+        )
+
+    log.info(
+        "evening recap",
+        extra={"user_id": uid, "entries": len(timeline.entries), "delivered": delivered},
+    )
+    return {"triggered": True, "delivered": delivered} | timeline.to_dict()
 
 
 # ---------------------------------------------------------------------------

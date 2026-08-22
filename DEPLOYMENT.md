@@ -22,19 +22,64 @@ creating it, so a partial failure is resumed by running it again.
 **Expect ~15 minutes on a cold project**, almost all of it waiting for Cloud SQL
 (~10 min) and Memorystore (~5 min) to provision.
 
-### Skipping Memorystore
+### Redis: skipped by default
 
-Memorystore plus the Serverless VPC connector is the slowest, most
-failure-prone, and most expensive part of the setup. For a hackathon demo you
-can skip it:
+**Memorystore is Google's managed Redis**, and at ~$35/month plus ~$9 for the
+Serverless VPC connector it needs, it was by far the most expensive thing here —
+for almost no benefit at demo scale. It is now **opt-in**.
+
+Two reasons it earns so little:
+
+- The browser sends the camera frame **with** the chat turn, so frames never
+  need to round-trip through a shared cache. (`/api/frame` exists, but the UI
+  does not use it.)
+- ADK's session service is in-process regardless, so conversation history does
+  not survive an instance change whether Redis exists or not. That is also why
+  `--max-instances` now defaults to **1**: a second turn routed to a different
+  instance would lose the conversation.
+
+Three options:
 
 ```bash
-REDIS_OPTIONAL=1 ./deployment/deploy.sh
+# 1. Default — no managed Redis, in-process cache.                  $0
+./deployment/deploy.sh
+
+# 2. External Redis over a public TLS endpoint. No VPC connector.   $0 free tier
+REDIS_URL='rediss://default:TOKEN@your-db.upstash.io:6379' ./deployment/deploy.sh
+
+# 3. Memorystore + VPC connector.                                   ~$44/month
+USE_MEMORYSTORE=1 ./deployment/deploy.sh
 ```
 
-The service falls back to an in-process cache. What you lose: session state and
-camera frames stop being shared across instances and are wiped on cold start.
-With `--max-instances=1` for a demo, that is usually invisible.
+Option 2 is the one to pick if you want genuinely shared state without the
+Memorystore bill. Any provider with a public `rediss://` endpoint works —
+Upstash, Redis Cloud, Aiven. `redis-py` handles TLS natively, and if the host is
+unreachable the service logs a warning and falls back to the in-process cache
+rather than failing to boot.
+
+**Supabase is not an option for this**, despite being the obvious thought:
+Supabase is Postgres plus auth, storage and edge functions — it has no Redis
+product. Where Supabase *does* fit is replacing **Cloud SQL**; see below.
+
+### Going (nearly) free
+
+Cloud SQL is the only remaining recurring cost. Point `DATABASE_URL` at a
+Supabase free-tier Postgres and skip the Cloud SQL step entirely:
+
+```bash
+# Supabase → Project Settings → Database → Connection string (URI)
+export DATABASE_URL='postgresql://postgres.PROJECT:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres'
+export REDIS_URL='rediss://default:TOKEN@your-db.upstash.io:6379'   # optional
+SKIP_CLOUD_SQL=1 ./deployment/deploy.sh
+```
+
+That leaves Cloud Run, which scales to zero — call it **$0/month idle**. The
+schema is applied automatically at startup against whatever `DATABASE_URL`
+points at, so no migration step changes.
+
+Use the **session pooler** connection string rather than the direct one:
+Cloud Run opens and drops connections as instances come and go, and the free
+tier's direct connection limit is low.
 
 ---
 
@@ -43,12 +88,18 @@ With `--max-instances=1` for a demo, that is usually invisible.
 | Resource | Name (default) | Why |
 |---|---|---|
 | Cloud Run service | `personal-context-agent` | the app |
-| Cloud SQL (PG 16) | `omnistant-pg`, `db-f1-micro` | the observation log |
-| Memorystore Redis | `omnistant-cache`, 1GB | session state, camera frames |
-| VPC connector | `omnistant-vpc` | Cloud Run → Memorystore private IP |
-| Secrets | `gemini-api-key`, `omnistant-db-password`, `omnistant-task-token` | credentials |
+| Cloud SQL (PG 16) | `omnistant-pg`, `db-f1-micro`, **ENTERPRISE edition** | the observation log |
+| Secrets | `gemini-api-key`, `omnistant-task-token`, `omnistant-database-url`, `omnistant-db-password` | credentials |
+| Secret | `omnistant-slack-webhook` — only if `SLACK_WEBHOOK_URL` is set | where the jobs deliver |
 | Scheduler job | `omnistant-morning-brief`, weekdays 08:00 | unprompted pre-departure check |
 | Scheduler job | `omnistant-evening-recap`, daily 21:00 | unprompted day recap |
+| Memorystore Redis | `omnistant-cache`, 1GB — **only with `USE_MEMORYSTORE=1`** | session state, camera frames |
+| VPC connector | `omnistant-vpc` — only with `USE_MEMORYSTORE=1` | Cloud Run → Memorystore private IP |
+
+The edition matters: new projects default to `ENTERPRISE_PLUS`, which rejects
+shared-core tiers. Creating a `db-f1-micro` without `--edition=ENTERPRISE` fails
+with *"Invalid Tier (db-f1-micro) for (ENTERPRISE_PLUS) Edition"*. The script
+passes it explicitly.
 
 Override any of these with environment variables:
 
@@ -67,6 +118,100 @@ every boot.
 
 To add a migration, drop a new numbered file into `migrations/` and keep it
 idempotent.
+
+---
+
+## Conversation durability
+
+Sessions are **Postgres-backed** via ADK's `DatabaseSessionService`, pointed at
+the same database as the observation log. That means a conversation survives:
+
+- a restart or a new revision, and
+- being routed to a different Cloud Run instance mid-conversation.
+
+With ADK's default `InMemorySessionService` neither held: the entire
+conversation lived in one process's RAM, so a restart erased it and turn two
+landing on another instance found nothing. That is why `--max-instances` is now
+**4** rather than 1 — the earlier limit was a workaround for exactly this.
+
+Verify it against your own database:
+
+```bash
+uv run python scripts/verify_session_durability.py
+# session backend: postgres
+# ...
+# PASS: conversation history survives a fresh process.
+```
+
+If `DATABASE_URL` is unset, or the session tables cannot be created, the service
+logs a warning and falls back to in-memory rather than refusing to boot. Check
+which backend is live:
+
+```bash
+gcloud run services logs read personal-context-agent --region=us-central1 \
+  | grep "agent engine ready"
+# ... "sessions": "postgres"
+```
+
+ADK creates its own tables (`sessions`, `events`, `app_states`, `user_states`,
+`adk_internal_metadata`) alongside ours on first run. No migration step needed.
+
+---
+
+## Credentials
+
+Connection strings carry secrets — the database password, and the token embedded
+in a hosted Redis URL. None of them travel as plain environment variables, where
+they would show up in `gcloud run services describe`, the Cloud Console, and
+every revision's history. They are written to Secret Manager and mounted:
+
+```
+--set-secrets  GEMINI_API_KEY, TASK_TOKEN, DATABASE_URL[, REDIS_URL]
+--set-env-vars GEMINI_MODEL, TIMEZONE, LOG_LEVEL   # nothing sensitive
+```
+
+To rotate any of them, add a new secret version and redeploy:
+
+```bash
+printf '%s' 'new-value' | gcloud secrets versions add omnistant-database-url --data-file=-
+gcloud run services update personal-context-agent --region=us-central1
+```
+
+---
+
+## Notifications
+
+The scheduled jobs compute a result whether or not anyone is listening. To have
+that result actually reach you, set a Slack incoming webhook:
+
+1. <https://api.slack.com/apps> → **Create New App** → From scratch.
+2. **Incoming Webhooks** → toggle on → **Add New Webhook to Workspace**.
+3. Pick a channel; copy the `https://hooks.slack.com/services/...` URL.
+
+```bash
+export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/T000/B000/xxxx'
+./deployment/deploy.sh
+```
+
+The URL *is* the credential — anyone holding it can post to that channel — so the
+script stores it in Secret Manager rather than passing it as an env var.
+
+Some workspaces require admin approval to install an app. If yours does and you
+cannot get it, the notifier is a one-class seam (`utils/notify.py`): a Telegram
+or email implementation is roughly twenty lines and nothing in the workflows
+changes.
+
+Delivery is best-effort by design. If Slack is unreachable or the webhook has
+been revoked, the job logs the failure, returns `"delivered": false`, and still
+completes with its result intact — a missed notification must never take down
+the run that produced it.
+
+Test it without waiting for 08:00:
+
+```bash
+TOKEN=$(gcloud secrets versions access latest --secret=omnistant-task-token)
+curl -s -X POST "$URL/api/tasks/morning-brief" -H "X-Task-Token: $TOKEN" | jq '.delivered, .message'
+```
 
 ---
 
@@ -136,21 +281,30 @@ Useful log messages: `leave scan`, `item recall`, `timeline built`,
 At demo scale, on `min-instances=0`, the dominant costs are the two always-on
 managed services — Cloud Run itself rounds to nothing when idle.
 
+**Default setup:**
+
 | | approx / month |
 |---|---|
-| Cloud Run (scale to zero, light use) | ~$0 |
-| Cloud SQL `db-f1-micro` | ~$8 |
-| Memorystore 1GB Basic | ~$35 |
-| VPC connector (2× e2-micro) | ~$9 |
+| Cloud Run (scales to zero) | ~$0 |
+| Cloud SQL `db-f1-micro`, ENTERPRISE | ~$8 |
+| Redis | $0 — not provisioned |
 | Cloud Scheduler (2 jobs) | free tier |
+| **Total** | **~$8** |
 
-`REDIS_OPTIONAL=1` removes the last two, taking it to roughly **$8/month**.
+**If you opt into Memorystore** (`USE_MEMORYSTORE=1`), add ~$35 for the 1GB
+Basic tier and ~$9 for the VPC connector it requires — **~$52/month**. Worth it
+only once you are running multiple instances with shared session state.
+
+**Free-tier route** (Supabase Postgres + optional Upstash Redis, Cloud Run only):
+**~$0/month**. See *Going (nearly) free* above.
 
 **Tear it all down:**
 
 ```bash
 gcloud run services delete personal-context-agent --region=us-central1
 gcloud sql instances delete omnistant-pg
+
+# Only if you deployed with USE_MEMORYSTORE=1:
 gcloud redis instances delete omnistant-cache --region=us-central1
 gcloud compute networks vpc-access connectors delete omnistant-vpc --region=us-central1
 gcloud scheduler jobs delete omnistant-morning-brief --location=us-central1

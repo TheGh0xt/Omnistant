@@ -17,13 +17,14 @@ whether a human or a cron trigger caused it to act.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from agent.intents import Intent, IntentResult, classify
@@ -59,13 +60,48 @@ class AgentReply:
         }
 
 
+def _sqlalchemy_url(dsn: str) -> str:
+    """Rewrite a libpq DSN into the SQLAlchemy async form.
+
+    ADK's DatabaseSessionService wants an async engine. Bare `postgresql://`
+    resolves to psycopg2, which is not installed and is not async; psycopg 3 is,
+    and its dialect is `postgresql+psycopg`.
+    """
+    return re.sub(r"^postgres(?:ql)?(?:\+\w+)?://", "postgresql+psycopg://", dsn)
+
+
+def build_session_service(cfg) -> tuple[BaseSessionService, str]:
+    """Durable sessions when there is a database, in-memory when there is not.
+
+    This is what lets a conversation survive a restart, and what lets more than
+    one Cloud Run instance serve the same user: with the in-memory service, turn
+    two routed to a different container finds no session and the agent forgets
+    the conversation mid-sentence.
+    """
+    if not cfg.postgres_enabled:
+        log.warning("no DATABASE_URL — conversations will be lost on restart")
+        return InMemorySessionService(), "in-memory"
+    try:
+        from google.adk.sessions import DatabaseSessionService
+
+        service = DatabaseSessionService(db_url=_sqlalchemy_url(cfg.database_url))
+        log.info("sessions are durable (postgres-backed)")
+        return service, "postgres"
+    except Exception as exc:  # noqa: BLE001 - never let this stop the service booting
+        log.warning(
+            "durable sessions unavailable, falling back to in-memory",
+            extra={"error": str(exc)},
+        )
+        return InMemorySessionService(), "in-memory (fallback)"
+
+
 class AgentEngine:
     """One agent, one runner, many sessions."""
 
     def __init__(self) -> None:
         cfg = get_config()
         self.config = cfg
-        self.session_service = InMemorySessionService()
+        self.session_service, self.session_backend = build_session_service(cfg)
         self.agent = LlmAgent(
             name="personal_context_agent",
             model=cfg.model,
@@ -83,7 +119,10 @@ class AgentEngine:
             agent=self.agent,
             session_service=self.session_service,
         )
-        log.info("agent engine ready", extra={"model": cfg.model, "tools": len(AGENT_TOOLS)})
+        log.info(
+            "agent engine ready",
+            extra={"model": cfg.model, "tools": len(AGENT_TOOLS), "sessions": self.session_backend},
+        )
 
     async def _ensure_session(self, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         existing = await self.session_service.get_session(
