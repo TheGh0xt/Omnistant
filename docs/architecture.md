@@ -21,8 +21,10 @@ deterministic functions over the log, and the model's job is language.
 
 ![Architecture](images/architecture.png)
 
-Two entry points is the point of the picture: one is a person, the other is
-nobody at all. Both run the same workflows against the same log.
+Three ways in is the point of the picture: you ask, it watches, or nobody is
+there at all. The watch loop is the one that changed the product — it writes
+straight to the log without the agent in the path, because identifying what is
+in a frame is not a decision that needs planning.
 
 ### 2 · Behaviour — how it learns, how sure it is, how it fails
 

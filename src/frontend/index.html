@@ -89,6 +89,13 @@
       <div id="obsList" class="obs-list"></div>
     </section>
 
+    <!-- ───────── Daily timeline ───────── -->
+    <section class="card timeline-card" id="timelineCard" hidden aria-labelledby="timelineHeading">
+      <div class="card-head"><h2 id="timelineHeading">Your day</h2><span class="tl-count" id="tlCount"></span></div>
+      <div class="tl-track" id="tlTrack"><div class="tl-rail" aria-hidden="true"></div></div>
+      <div class="tl-detail" id="tlDetail"></div>
+    </section>
+
     <!-- ───────── Agent response ───────── -->
     <section class="card response" id="response" hidden aria-live="polite">
       <p class="answer" id="answer"></p>
@@ -125,6 +132,10 @@
       </div>
       <div class="speak-bars" id="speakBars" hidden aria-hidden="true"><i></i><i></i><i></i></div>
     </div>
+    <button class="wake-pill" id="wakePill" aria-pressed="false">
+      <span class="wake-dot" aria-hidden="true"></span>
+      <span id="wakeLabel">Wake word off — tap to talk</span>
+    </button>
     <form class="composer" id="composer">
       <input id="input" type="text" placeholder="…or type here" autocomplete="off" aria-label="Type a message" />
       <button type="submit" class="btn-send" id="sendBtn">Send</button>

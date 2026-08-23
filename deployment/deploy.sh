@@ -279,7 +279,13 @@ schedule_job() {
   fi
 }
 
-schedule_job omnistant-morning-brief "0 8 * * 1-5" "/api/tasks/morning-brief"
+# Every five minutes: deliver any reminder that has come due. This is what makes
+# "tell me a few minutes after I leave" possible on a service that scales to zero.
+schedule_job omnistant-drain-nudges  "*/5 * * * *"   "/api/tasks/drain-nudges"
+# Ticks through the morning; the endpoint decides whether it is actually within
+# the window before this routine's *learned* departure time, and claims a
+# once-per-day mark so repeated ticks cannot notify twice.
+schedule_job omnistant-morning-brief "*/15 5-11 * * *" "/api/tasks/morning-brief"
 schedule_job omnistant-evening-recap "0 21 * * *"  "/api/tasks/evening-recap"
 
 say "Done"

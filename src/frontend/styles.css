@@ -281,3 +281,44 @@ main {
   .globe-card { grid-row: span 2; }
   .quick { grid-column: 1 / -1; }
 }
+
+/* ───────── daily timeline ───────── */
+.timeline-card { border: 1px solid var(--border); padding: 20px 16px; gap: 16px; animation: riseIn .4s ease-out; }
+.timeline-card[hidden] { display: none; }
+.tl-count { font-size: 12px; color: var(--muted); }
+.tl-track { position: relative; height: 56px; }
+.tl-rail {
+  position: absolute; top: 14px; left: 6px; right: 6px;
+  height: 6px; border-radius: var(--r-pill); background: var(--border);
+}
+.tl-event {
+  position: absolute; top: 0; width: 48px; height: 56px;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: none; border: none; padding: 0;
+}
+.tl-dot {
+  width: 16px; height: 16px; border-radius: 50%; margin-top: 9px;
+  box-shadow: 0 0 0 4px rgba(232,234,237,.9);
+  transition: box-shadow .3s ease;
+}
+.tl-event.selected .tl-dot { box-shadow: 0 0 0 4px rgba(74,144,226,.22); }
+.tl-time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.tl-detail { border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 2px; }
+.tl-title { font-size: 16px; font-weight: 500; }
+.tl-meta { font-size: 12px; color: var(--muted); }
+
+/* ───────── wake word ───────── */
+.wake-pill {
+  min-height: 36px; padding: 0 14px; border-radius: var(--r-pill);
+  display: inline-flex; align-items: center; gap: 8px; align-self: center;
+  background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+  font-size: 12px; font-weight: 600;
+  transition: background .3s ease, border-color .3s ease, color .3s ease;
+}
+.wake-pill[aria-pressed="true"] { background: var(--primary-tint); border-color: var(--primary); color: var(--primary-text); }
+.wake-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dot-off); flex: none; transition: background .3s ease; }
+.wake-pill[aria-pressed="true"] .wake-dot { background: var(--item); }
+.wake-note { font-size: 12px; color: var(--muted); text-align: center; margin: 0; max-width: 44ch; align-self: center; }
+.wake-note[hidden] { display: none; }
+.mic-halo.standby { opacity: .3; animation: haloPulse 4s ease-in-out infinite; }

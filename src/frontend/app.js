@@ -33,7 +33,9 @@
     gotIt: el('gotIt'), toggleDetails: el('toggleDetails'),
     micBtn: el('micBtn'), micHalo: el('micHalo'),
     voiceStatus: el('voiceStatus'), voiceTranscript: el('voiceTranscript'), speakBars: el('speakBars'),
-    composer: el('composer'), input: el('input'), sendBtn: el('sendBtn')
+    composer: el('composer'), input: el('input'), sendBtn: el('sendBtn'),
+    timelineCard: el('timelineCard'), tlTrack: el('tlTrack'), tlDetail: el('tlDetail'), tlCount: el('tlCount'),
+    wakePill: el('wakePill'), wakeLabel: el('wakeLabel')
   };
 
   var camera = new Camera(els.video, els.canvas);
@@ -44,7 +46,8 @@
     screen: 'home', busy: false,
     watching: false, lastApiAt: 0, tickTimer: null, pausedUntil: 0,
     observations: [], filter: 'all',
-    revealTimer: null, detailRows: []
+    revealTimer: null, detailRows: [],
+    timeline: [], timelineTotal: 0, tlSelected: 0, wake: false, heardTimer: null
   };
 
   var RESTING_HINT = 'Tap to talk, or just type below.';
@@ -262,6 +265,157 @@
     if (result.logged) { refreshObservations(); }
   }
 
+
+  /* ───────── daily timeline ─────────
+   *
+   * A horizontal bar rather than a list: the point of the redesign was that a
+   * day should be glanceable. The handoff spaces five events at 6% + i·22%;
+   * real days have any number, so spacing is derived and lands exactly on those
+   * positions when there are five.
+   */
+  // The bar is 375px wide and the labels are ~52px, so more than six timestamps
+  // collide into an unreadable smear. That is not only a layout limit — a day
+  // worth glancing at is a handful of moments, not every sighting. Prefer the
+  // things that give a day its shape (where you were, what you did) and spread
+  // the rest evenly across the clock.
+  var MAX_MOMENTS = 6;
+
+  function condense(entries) {
+    if (entries.length <= MAX_MOMENTS) { return entries; }
+    var shape = entries.filter(function (e) { return e.kind !== 'item'; });
+    var pool = shape.length >= 2 ? shape : entries;
+    if (pool.length <= MAX_MOMENTS) { return pool; }
+    // Keep the first and last, sample the middle at even intervals.
+    var picked = [];
+    var step = (pool.length - 1) / (MAX_MOMENTS - 1);
+    for (var i = 0; i < MAX_MOMENTS; i++) { picked.push(pool[Math.round(i * step)]); }
+    return picked;
+  }
+
+  async function showTimeline() {
+    try {
+      var data = await api('/api/timeline?user_id=' + encodeURIComponent(state.userId || ''));
+      state.timelineTotal = (data.entries || []).length;
+      state.timeline = condense(data.entries || []).map(function (e, i) {
+        return { id: 'tl' + i, time: e.time, title: e.subject, type: e.kind,
+                 meta: [e.location, e.detail].filter(Boolean).join(' · ') };
+      });
+    } catch (err) {
+      state.timeline = [];
+      state.timelineTotal = 0;
+    }
+    state.tlSelected = Math.max(0, state.timeline.length - 1);   // most recent first
+    renderTimeline();
+    els.timelineCard.hidden = false;
+  }
+
+  function renderTimeline() {
+    var track = els.tlTrack;
+    // Keep the rail; replace the events.
+    Array.prototype.slice.call(track.querySelectorAll('.tl-event')).forEach(function (n) { n.remove(); });
+
+    var n = state.timeline.length;
+    var total = state.timelineTotal || n;
+    els.tlCount.textContent = n
+      ? (total > n ? n + ' of ' + total + ' moments' : n + (n === 1 ? ' moment' : ' moments'))
+      : '';
+    if (!n) {
+      els.tlDetail.textContent = '';
+      var empty = document.createElement('p');
+      empty.className = 'tl-meta';
+      empty.textContent = 'Nothing logged yet today. Turn the camera on and I’ll start filling this in.';
+      els.tlDetail.appendChild(empty);
+      return;
+    }
+
+    var span = 88;                       // 6%..94%, matching the handoff
+    state.timeline.forEach(function (event, i) {
+      var pct = n === 1 ? 50 : 6 + (i * (span / (n - 1)));
+      var btn = document.createElement('button');
+      btn.className = 'tl-event' + (i === state.tlSelected ? ' selected' : '');
+      btn.type = 'button';
+      btn.style.left = pct + '%';
+      btn.setAttribute('aria-label', event.time + ' ' + event.title);
+
+      var dot = document.createElement('span');
+      dot.className = 'tl-dot';
+      dot.style.background = Globe.TYPE_COLOR[event.type] || '#4A90E2';
+      var time = document.createElement('span');
+      time.className = 'tl-time';
+      time.textContent = event.time;
+      btn.appendChild(dot); btn.appendChild(time);
+      btn.addEventListener('click', function () { state.tlSelected = i; renderTimeline(); });
+      track.appendChild(btn);
+    });
+
+    var selected = state.timeline[state.tlSelected];
+    els.tlDetail.textContent = '';
+    var title = document.createElement('div');
+    title.className = 'tl-title';
+    title.textContent = selected.title;
+    var meta = document.createElement('div');
+    meta.className = 'tl-meta';
+    meta.textContent = [selected.type, selected.meta, selected.time].filter(Boolean).join(' · ');
+    els.tlDetail.appendChild(title); els.tlDetail.appendChild(meta);
+  }
+
+  /* ───────── wake word ───────── */
+  var wake = new WakeWord({
+    // Show what the recogniser actually heard while in standby. Without this,
+    // a wake word that isn't firing is indistinguishable from a microphone that
+    // isn't working, and there is no way to tell whether you said it wrong.
+    onHeard: function (text) {
+      if (state.busy || !state.wake) { return; }
+      els.voiceTranscript.textContent = '“' + text + '”';
+      clearTimeout(state.heardTimer);
+      state.heardTimer = setTimeout(function () {
+        if (state.wake && !state.busy) {
+          els.voiceTranscript.textContent = 'Say “Hey Omni”, or tap to talk.';
+        }
+      }, 2500);
+    },
+    onWake: function () {
+      // The trigger stream is tuned for two words; hand the floor to the real
+      // recogniser for the actual command.
+      setAgentStatus('Listening');
+      if (state.listener) { state.listener.start(); }
+    },
+    onStateChange: function (standby) {
+      els.micHalo.classList.toggle('standby', standby && !state.busy);
+      if (standby && !state.busy) { setAgentStatus('Standing by'); }
+    },
+    onError: function (message) {
+      setWake(false);
+      say(message);
+    }
+  });
+
+  function setWake(on) {
+    state.wake = on;
+    els.wakePill.setAttribute('aria-pressed', String(on));
+    els.wakeLabel.textContent = on
+      ? 'Wake word on — always listening'
+      : 'Wake word off — tap to talk';
+    if (on) {
+      wake.enable();
+      els.voiceTranscript.textContent = 'Say “Hey Omni”, or tap to talk.';
+    } else {
+      wake.disable();
+      els.micHalo.classList.remove('standby');
+      els.voiceTranscript.textContent = RESTING_HINT;
+    }
+    setAgentStatus(on ? 'Standing by' : (state.watching ? 'Watching' : 'Ready'));
+  }
+
+  els.wakePill.addEventListener('click', function () {
+    if (!wake.isSupported()) { say('This browser can’t listen for a wake word. Tap the mic instead.'); return; }
+    if (!state.wake) {
+      // Said plainly, once, before it is switched on: this is not local.
+      say('Wake word on. I’ll listen for “Hey Omni”. This streams microphone audio to your browser’s speech service while it’s on — turn it off any time.');
+    }
+    setWake(!state.wake);
+  });
+
   /* ───────── conversation ───────── */
   els.composer.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -286,6 +440,7 @@
       };
       els.workflowTitle.textContent = titles[btn.dataset.action][0];
       els.workflowSub.textContent = titles[btn.dataset.action][1];
+      if (btn.dataset.action === 'timeline') { showTimeline(); } else { els.timelineCard.hidden = true; }
       send(phrases[btn.dataset.action]);
     });
   });
@@ -294,6 +449,7 @@
     text = (text || '').trim();
     if (!text || state.busy) { return; }
     state.busy = true;
+    wake.suspend();          // don't let it hear its own reply and wake itself
     els.sendBtn.disabled = true;
     els.input.value = '';
     setAgentStatus('Thinking');
@@ -317,8 +473,10 @@
     } finally {
       state.busy = false;
       els.sendBtn.disabled = false;
-      setAgentStatus(state.watching ? 'Watching' : 'Ready');
+      setAgentStatus(state.wake ? 'Standing by' : (state.watching ? 'Watching' : 'Ready'));
       setVoice('idle', 'Voice', RESTING_HINT);
+      // Give speech synthesis time to finish before opening the mic again.
+      setTimeout(function () { wake.resume(); }, 1200);
     }
   }
 
@@ -385,6 +543,7 @@
   }
 
   els.gotIt.addEventListener('click', function () {
+    els.timelineCard.hidden = true;
     clearInterval(state.revealTimer);
     els.response.hidden = true;
     els.speakBars.hidden = true;
@@ -439,7 +598,8 @@
       els.voiceTranscript.textContent = 'Voice isn’t supported here — type below.';
       return;
     }
-    els.micBtn.addEventListener('click', function () { listener.toggle(); });
+    state.listener = listener;
+    els.micBtn.addEventListener('click', function () { wake.suspend(); listener.toggle(); });
   }
 
   boot();

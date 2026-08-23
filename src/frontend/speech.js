@@ -315,6 +315,163 @@
     }
   }
 
+
+  /* ---------------- wake word ----------------
+   *
+   * Always-listening, and opt-in for a reason worth stating plainly: the Web
+   * Speech API is *server-based*. Turning this on streams microphone audio to
+   * the browser vendor continuously. It costs no Gemini quota — different
+   * service entirely — but it is not local, and the UI says so.
+   *
+   * Three things make a naive implementation fail:
+   *
+   *   1. The recogniser stops on its own every few seconds. It has to be
+   *      restarted, forever, without turning a persistent failure into a
+   *      restart storm — hence the backoff and the give-up count.
+   *   2. It hears the agent's own replies and wakes itself. Listening is
+   *      suspended while the page is speaking.
+   *   3. It competes with push-to-talk for the microphone. Standby yields
+   *      whenever the user takes the floor deliberately.
+   */
+  function WakeWord(opts) {
+    opts = opts || {};
+    this.pattern = opts.pattern || WakeWord.DEFAULT_PATTERN;
+    this.onWake = opts.onWake || function () {};
+    this.onHeard = opts.onHeard || function () {};
+    this.onStateChange = opts.onStateChange || function () {};
+    this.onError = opts.onError || function () {};
+    this.enabled = false;
+    this.suspended = false;
+    this.recognition = null;
+    this.failures = 0;
+    this.restartTimer = null;
+  }
+
+  WakeWord.MAX_FAILURES = 5;
+
+  /* "Omni" is an invented word, so speech recognition never returns it the same
+   * way twice — "omny", "omnie", "on me", "omani" are all things it produces for
+   * the same sound. Matching an exact string means the wake word simply does not
+   * work, which is what happened. Match a greeting followed by anything that
+   * sounds like it instead, and accept the full product name on its own because
+   * it is distinctive enough not to fire by accident. */
+  WakeWord.DEFAULT_PATTERN =
+    /\b(?:hey|hi|hello|ok|okay|yo)\s+(?:omni\w*|omn\w+|omany|ohmni|amani|on\s?me|almighty)\b|\bomnistant\b/;
+
+  WakeWord.prototype.isSupported = function () { return !!Recognition; };
+
+  WakeWord.prototype._matches = function (text) {
+    // Collapsing whitespace matters: stripping the comma out of "Hey, Omni!"
+    // leaves a double space, and an exact substring match then fails on one of
+    // the most likely transcriptions there is.
+    var heard = String(text).toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    return this.pattern.test(heard);
+  };
+
+  WakeWord.prototype._build = function () {
+    var self = this;
+    var rec = new Recognition();
+    rec.lang = global.navigator.language || 'en-US';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onresult = function (event) {
+      if (self.suspended) { return; }
+      for (var i = event.resultIndex; i < event.results.length; i++) {
+        var text = event.results[i][0].transcript || '';
+        if (text.trim()) { self.onHeard(text.trim()); }
+        if (self._matches(text)) {
+          self.failures = 0;
+          // Hand the floor to the real recogniser rather than trying to parse
+          // the command out of a stream tuned for a two-word trigger.
+          self.suspend();
+          self.onWake();
+          return;
+        }
+      }
+    };
+
+    rec.onerror = function (event) {
+      if (event.error === 'no-speech' || event.error === 'aborted') { return; }
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        self.disable();
+        self.onError('Microphone access is blocked, so the wake word cannot listen.');
+        return;
+      }
+      self.failures += 1;
+    };
+
+    rec.onend = function () {
+      if (!self.enabled) { self.onStateChange(false); return; }
+      if (self.failures >= WakeWord.MAX_FAILURES) {
+        self.disable();
+        self.onError('Wake word kept failing, so I turned it off. Tap the mic to talk instead.');
+        return;
+      }
+      // Back off as failures accumulate; a tight restart loop on a broken
+      // recogniser will flatten the battery and achieve nothing.
+      var delay = self.failures ? Math.min(8000, 400 * Math.pow(2, self.failures)) : 250;
+      self.restartTimer = global.setTimeout(function () { self._spin(); }, delay);
+    };
+
+    return rec;
+  };
+
+  WakeWord.prototype._spin = function () {
+    if (!this.enabled || this.suspended) { return; }
+    this.recognition = this._build();
+    try {
+      this.recognition.start();
+      this.onStateChange(true);
+    } catch (err) {
+      this.failures += 1;
+      var self = this;
+      this.restartTimer = global.setTimeout(function () { self._spin(); }, 1000);
+    }
+  };
+
+  WakeWord.prototype.enable = function () {
+    if (!this.isSupported() || this.enabled) { return false; }
+    this.enabled = true;
+    this.suspended = false;
+    this.failures = 0;
+    this._spin();
+    return true;
+  };
+
+  WakeWord.prototype.disable = function () {
+    this.enabled = false;
+    global.clearTimeout(this.restartTimer);
+    this._teardown();
+    this.onStateChange(false);
+  };
+
+  WakeWord.prototype._teardown = function () {
+    if (this.recognition) {
+      try { this.recognition.abort(); } catch (err) { /* already gone */ }
+      this.recognition = null;
+    }
+  };
+
+  /* Stand down while the agent talks or while push-to-talk holds the mic. */
+  WakeWord.prototype.suspend = function () {
+    if (!this.enabled || this.suspended) { return; }
+    this.suspended = true;
+    global.clearTimeout(this.restartTimer);
+    this._teardown();
+    this.onStateChange(false);
+  };
+
+  WakeWord.prototype.resume = function () {
+    if (!this.enabled || !this.suspended) { return; }
+    this.suspended = false;
+    this.failures = 0;
+    this._spin();
+  };
+
+  global.WakeWord = WakeWord;
+
   global.Listener = Listener;
   global.Speaker = Speaker;
 })(window);

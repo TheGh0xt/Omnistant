@@ -23,7 +23,8 @@ import pytest
 # is present-but-falsey, which is exactly what we want: no Postgres, no Redis, no
 # API key, so `Config.genai_available` is False and every Gemini call takes the
 # deterministic stub path.
-for _var in ("DATABASE_URL", "REDIS_URL", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
+for _var in ("DATABASE_URL", "REDIS_URL", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+             "SLACK_WEBHOOK_URL"):
     os.environ[_var] = ""
 os.environ["TIMEZONE"] = "UTC"
 
@@ -31,6 +32,7 @@ from utils.config import get_config  # noqa: E402
 
 assert not get_config().genai_available, "tests must not reach a live model"
 assert not get_config().postgres_enabled, "tests must not reach a live database"
+assert not get_config().slack_webhook_url, "tests must not post to a real channel"
 
 from utils import cache as cache_module  # noqa: E402
 from utils import db as db_module  # noqa: E402

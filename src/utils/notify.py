@@ -107,7 +107,7 @@ class SlackNotifier(Notifier):
         blocks.append(
             {
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": "Personal Context Agent · sent automatically"}],
+                "elements": [{"type": "mrkdwn", "text": "Omnistant · sent automatically"}],
             }
         )
         return blocks

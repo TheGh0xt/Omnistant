@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from agent.engine import get_engine, init_engine
 from agent.watch import observe_tick
-from agent.workflows import daily_timeline, item_recall, leave_detection
+from agent.workflows import daily_timeline, humanize_items, item_recall, leave_detection
 from tools.vision import ImageDecodeError, decode_data_url
 from utils.cache import close_cache, get_cache, init_cache, new_session_id
 from utils.config import get_config, tz
@@ -343,12 +343,34 @@ async def api_session(session_id: str, user_id: str | None = None) -> dict[str, 
 # ---------------------------------------------------------------------------
 # Autonomous triggers (Cloud Scheduler)
 # ---------------------------------------------------------------------------
-@app.post("/api/tasks/morning-brief", dependencies=[Depends(require_task_token)])
-async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
-    """Unprompted: before the usual departure time, say what today needs.
+def _brief_window(typical_time: str | None) -> tuple[int, int] | None:
+    """Minutes-since-midnight window in which the brief is useful."""
+    if not typical_time:
+        return None
+    try:
+        hh, mm = str(typical_time).split(":")[:2]
+        departs = int(hh) * 60 + int(mm)
+    except (ValueError, TypeError):
+        return None
+    return max(0, departs - BRIEF_LEAD_MINUTES), departs
 
-    Runs with no user in the loop. Reports what the work routine expects and
-    which of those things the agent has not seen recently enough to vouch for.
+
+# The brief is worth sending in the run-up to leaving, not at a fixed hour. This
+# is how long before the learned departure time the window opens.
+BRIEF_LEAD_MINUTES = 25
+
+
+@app.post("/api/tasks/morning-brief", dependencies=[Depends(require_task_token)])
+async def task_morning_brief(user_id: str | None = None, force: bool = False) -> dict[str, Any]:
+    """Unprompted: shortly before you usually leave, say what today needs.
+
+    Called on a cadence rather than at a fixed hour, and fires only inside a
+    window ending at the departure time this routine has actually been observed
+    to happen at. A brief pinned to 08:00 lands 45 minutes early for someone who
+    leaves at 08:45, and lands after the fact on a day they leave at 07:30 —
+    which makes it noise, and noise gets muted.
+
+    `force=true` bypasses the window, for demos and manual checks.
     """
     uid = _user(user_id)
     store = get_store()
@@ -356,6 +378,25 @@ async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
     primary = next((r for r in routines if r.routine_name in {"work", "office"}), None)
     if primary is None:
         return {"triggered": True, "message": "No work routine learned yet — nothing to brief on."}
+
+    local_now = datetime.now(tz())
+    if not force:
+        window = _brief_window(primary.typical_time)
+        if window is None:
+            return {"triggered": False, "skipped": "no departure time learned yet"}
+        opens, closes = window
+        minutes_now = local_now.hour * 60 + local_now.minute
+        if not (opens <= minutes_now <= closes):
+            return {
+                "triggered": False,
+                "skipped": "outside the departure window",
+                "window": f"{opens // 60:02d}:{opens % 60:02d}-{closes // 60:02d}:{closes % 60:02d}",
+                "now": local_now.strftime("%H:%M"),
+            }
+        # Ticking every 15 minutes means the window is hit more than once; the
+        # claim is what stops that becoming two notifications.
+        if not await store.claim_daily_mark(uid, "morning-brief", local_now.date()):
+            return {"triggered": False, "skipped": "already briefed today"}
 
     unverified: list[dict[str, Any]] = []
     for item in primary.expected_items:
@@ -394,6 +435,86 @@ async def task_morning_brief(user_id: str | None = None) -> dict[str, Any]:
         "expected_items": primary.expected_items, "unverified": unverified,
         "message": message, "delivered": delivered,
     }
+
+
+@app.post("/api/tasks/drain-nudges", dependencies=[Depends(require_task_token)])
+async def task_drain_nudges() -> dict[str, Any]:
+    """Deliver reminders that have come due.
+
+    Cloud Run scales to zero, so a delayed reminder cannot be a sleeping task —
+    it is a row with a due time, and this drains whatever has matured. Run it
+    every few minutes.
+
+    Each nudge is re-checked before it is sent. If the agent has seen the item
+    since the scan that raised it, the reminder is cancelled rather than
+    delivered: telling someone they forgot the keys they are holding is exactly
+    the kind of noise that gets an assistant muted.
+    """
+    store = get_store()
+    now = datetime.now(timezone.utc)
+    due = await store.due_nudges(now)
+
+    sent, cancelled = 0, 0
+    for nudge in due:
+        payload = nudge.get("payload") or {}
+        scanned_at = payload.get("scanned_at")
+        still_missing: list[str] = []
+
+        # Where each thing was last seen, so the reminder is actionable. We are
+        # already running this query to decide whether to send at all; throwing
+        # the location away made the user turn back blind.
+        last_seen: list[str] = []
+        for item in payload.get("missing", []):
+            recall = await item_recall(user_id=nudge["user_id"], item=item, limit=1)
+            seen_since = (
+                recall.found
+                and scanned_at
+                and recall.sightings[0].at.isoformat() > scanned_at
+            )
+            if seen_since:
+                continue
+            still_missing.append(item)
+            if recall.found:
+                sighting = recall.sightings[0]
+                where = ", ".join(filter(None, [sighting.location, sighting.detail]))
+                if where:
+                    last_seen.append(f"{humanize_items([item])} — {where}, {sighting.time_str}")
+
+        if not still_missing:
+            await store.close_nudge(nudge["id"], sent=False)
+            cancelled += 1
+            continue
+
+        names = humanize_items(still_missing)
+        # Elapsed time comes from the scan, not the configured delay: the drain
+        # runs on a cadence, so the real gap is whatever it actually was.
+        try:
+            elapsed = int((now - datetime.fromisoformat(scanned_at)).total_seconds() // 60)
+        except (TypeError, ValueError):
+            elapsed = int(cfg.leave_nudge_delay_minutes)
+        when = "just now" if elapsed < 1 else f"about {elapsed} minute{'s' if elapsed != 1 else ''} ago"
+
+        await get_notifier().send(
+            Notification(
+                title="You left without something",
+                body=(
+                    f"You headed to {payload.get('routine', 'out')} {when} without your "
+                    f"{names}. Still close enough to turn back?"
+                ),
+                facts=(
+                    [("Missing", names)]
+                    + ([("Last seen", "\n".join(last_seen))] if last_seen else [])
+                    + [("Left from", payload.get("origin", "home"))]
+                ),
+                urgent=True,
+            )
+        )
+        await store.close_nudge(nudge["id"], sent=True)
+        sent += 1
+
+    if due:
+        log.info("nudges drained", extra={"due": len(due), "sent": sent, "cancelled": cancelled})
+    return {"triggered": True, "due": len(due), "sent": sent, "cancelled": cancelled}
 
 
 @app.post("/api/tasks/evening-recap", dependencies=[Depends(require_task_token)])
