@@ -56,14 +56,25 @@
 
 ## Build Status
 
-- [ ] Day 1-2: Agent engine + workflow setup
-- [ ] Day 3: Leave detection workflow
-- [ ] Day 4: Item recall workflow
-- [ ] Day 5: Timeline reconstruction
-- [ ] Day 6: Frontend integration
-- [ ] Day 7: Cloud Run deployment
-- [ ] Day 8: Demo recording
+- [x] Day 1-2: Agent engine + workflow setup
+- [x] Day 3: Leave detection workflow
+- [x] Day 4: Item recall workflow
+- [x] Day 5: Timeline reconstruction
+- [x] Day 6: Frontend integration — rebuilt to the mobile handoff (memory globe,
+      voice bar, timeline bar, wake word)
+- [x] Day 7: Cloud Run deployment — live at https://omnistant-3oe5odab6a-uc.a.run.app
+- [ ] Day 8: Demo recording  ← **blocked on enabling billing**
 - [ ] Day 9: Devpost submission
+
+Beyond the original plan:
+
+- [x] Continuous observation — the agent watches rather than answering once
+- [x] Delayed leave reminders that re-check and cancel themselves
+- [x] Departure time learned from behaviour instead of a fixed 08:00
+- [x] Slack delivery for the autonomous jobs
+- [x] Postgres-backed sessions (conversations survive restarts)
+
+Known gaps and everything post-hackathon: [ROADMAP.md](ROADMAP.md)
 
 ---
 

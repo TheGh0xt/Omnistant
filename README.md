@@ -392,6 +392,15 @@ with the failure it actually produced:
 
 ---
 
+## Roadmap and known limitations
+
+What is deliberately not done, and why — including the one real gap: the agent
+only knows you are leaving because you told it, which the web cannot fix.
+
+See [ROADMAP.md](ROADMAP.md).
+
+---
+
 ## Deploy
 
 See [DEPLOYMENT.md](DEPLOYMENT.md).
