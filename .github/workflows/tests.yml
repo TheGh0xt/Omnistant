@@ -1,0 +1,33 @@
+# The suite is hermetic: no database, no Redis, no API key, no network. Verified
+# by running it in a clean clone with no .env present. So CI needs no secrets,
+# and a failure here is a real failure rather than a missing credential.
+#
+# This exists because the suite was silently uncollectable under a bare `pytest`
+# for several commits while passing under `python -m pytest`. Both entry points
+# run below, so that specific failure cannot come back unnoticed.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: pytest
+        run: uv run pytest -q
+
+      - name: python -m pytest
+        run: uv run python -m pytest -q

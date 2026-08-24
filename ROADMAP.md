@@ -107,9 +107,10 @@ only.
   live in an in-process cache, so they do not survive a cold start or a second
   instance. Harmless at one instance; `USE_MEMORYSTORE=1` or an external
   `rediss://` URL when that changes.
-- **No CI.** The suite is hermetic and runs in under a second — it should run on
-  every push. `tests/test_packaging.py` in particular exists because a stale
-  `requirements.txt` silently shipped a degraded build once already.
+- ~~**No CI.**~~ Shipped: `.github/workflows/tests.yml` runs the suite on every
+  push and PR, under both `pytest` and `python -m pytest`, because the suite was
+  once uncollectable under one of them while passing under the other. No secrets
+  needed — the suite is hermetic.
 - **No rate limiting** on the public endpoints.
 - **The evening recap has no delivery trigger tied to behaviour** — it is still a
   fixed 21:00, unlike the brief, which now learns.

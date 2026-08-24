@@ -193,6 +193,117 @@ runs — it falls back to in-memory storage — but nothing survives a restart.
 
 ---
 
+## Reproducible testing
+
+A clean-clone path from nothing to all three workflows exercised. **Steps 1 and 2
+need no API key, no camera, no network and no database** — start there if you
+only want to confirm the thing works.
+
+### 1. The test suite (no credentials, no services)
+
+```bash
+uv sync
+uv run pytest -q
+```
+
+**Expect:** `106 passed` in well under a second.
+
+The suite is hermetic. Credentials are blanked in `conftest.py` before config
+loads, so every Gemini call takes the deterministic stub path — there is no
+network access and nothing to configure. If you see `ModuleNotFoundError: No
+module named 'tests'`, you are on a build predating the `pythonpath` fix in
+`pyproject.toml`.
+
+### 2. The workflows over HTTP (no camera)
+
+```bash
+./run.sh                                    # first run writes .env, then asks for a key
+```
+
+Paste a [Gemini API key](https://aistudio.google.com/apikey) into `.env` as
+`GEMINI_API_KEY=...`, run `./run.sh` again, then:
+
+```bash
+curl -s localhost:8080/health | jq .
+```
+
+**Expect:** `"status": "ok"` with `"postgres": "up"`, `"redis": "up"`,
+`"sessions": "postgres"`. Anything reading `fallback (...)` means that subsystem
+is not actually running — the service stays up, which is the point of reporting
+the backend by name rather than a bare "up".
+
+```bash
+U=00000000-0000-0000-0000-000000000001
+
+# Workflow 2 — item recall. Costs zero model calls.
+curl -s "localhost:8080/api/recall?item=AirPods&user_id=$U" | jq .speech
+
+# Workflow 3 — daily timeline.
+curl -s "localhost:8080/api/timeline?user_id=$U" | jq .speech
+
+# Workflow 1 — leave scan. With no frame it reports from the routine alone.
+curl -s -X POST localhost:8080/api/leave-scan \
+  -H 'Content-Type: application/json' \
+  -d '{"destination":"work","user_id":"'$U'"}' | jq .speech
+```
+
+**Expect:** recall answers from the seeded log with a location and a confidence
+that reflects the sighting's age; timeline reconstructs the seeded day; the leave
+scan names what is missing for `work`.
+
+### 3. The conversational path
+
+Open <http://localhost:8080> and type:
+
+1. **"I left my keys on the hall table"** → records an observation.
+2. **"Where are my keys?"** → answers from the log, with confidence.
+3. **"What did I do today?"** → reconstructs the day.
+
+**Expect:** step 2 returns the hall table, sourced from the row step 1 wrote —
+not from the model's recollection of the conversation.
+
+### 4. The vision path (needs a camera)
+
+Press **Start camera**, point it at a desk, and say or type **"I'm going to
+work"**.
+
+**Expect:** the frame is scanned, and anything in the `work` routine that is not
+visible comes back with its last-known location. Grant camera permission when
+prompted; frames live in Redis for 15 minutes and are never written to disk.
+
+### 5. The autonomous jobs
+
+These are what Cloud Scheduler calls in production. Triggered by hand:
+
+```bash
+curl -s -X POST localhost:8080/api/tasks/morning-brief | jq .
+curl -s -X POST localhost:8080/api/tasks/evening-recap | jq .
+curl -s -X POST localhost:8080/api/tasks/drain-nudges  | jq .
+```
+
+**Expect:** a `message` naming what the agent cannot vouch for, and
+`"delivered": false` unless `SLACK_WEBHOOK_URL` is set. Delivery is best-effort
+by design — the job reaches its conclusion whether or not Slack is reachable.
+
+`drain-nudges` is what makes a delayed reminder cancel itself: it re-checks every
+pending nudge against the log and drops any whose item has been seen since the
+scan that raised it.
+
+These endpoints are guarded by `TASK_TOKEN`, which `.env.example` leaves empty
+for local use. If you set one, add `-H "X-Task-Token: $TASK_TOKEN"`.
+
+### 6. Session durability (needs the database from step 2)
+
+```bash
+uv run python scripts/verify_session_durability.py
+```
+
+**Expect:** `session backend: postgres` followed by `PASS: conversation history
+survives a fresh process.` This is the one claim the hermetic suite cannot make,
+because proving it requires a real database and a real restart.
+
+---
+
 ## Using the interface
 
 <img src="docs/images/ui-conversation.png" alt="The agent answering a recall question, showing decayed confidence and the observation log" width="380">
@@ -367,7 +478,7 @@ src/
 ## Tests
 
 ```bash
-uv run pytest -q          # 83 tests, ~0.6s
+uv run pytest -q          # 106 tests, ~0.6s
 ```
 
 The suite is hermetic: no Postgres, no Redis, no API key, no network. Credentials
