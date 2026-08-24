@@ -73,3 +73,19 @@ def test_requirements_covers_every_declared_dependency():
 def test_runtime_critical_packages_are_pinned(package):
     """Each of these, if absent, degrades something quietly instead of crashing."""
     assert _normalise(package) in _pinned_in_requirements()
+
+
+def test_pytest_pythonpath_makes_the_suite_collectable_either_way():
+    """`python -m pytest` inserts the cwd into sys.path; a bare `pytest` does not.
+
+    Four test modules import `tests.conftest`, so with only `src` on the path the
+    suite passed when invoked one way and failed collection the other — and the
+    README documented the failing one. Both entry points must work.
+    """
+    data = tomllib.loads(PYPROJECT.read_text())
+    pythonpath = data["tool"]["pytest"]["ini_options"]["pythonpath"]
+    assert "." in pythonpath, (
+        "the repo root must be on pytest's pythonpath, or `uv run pytest` cannot "
+        "import tests.conftest"
+    )
+    assert "src" in pythonpath

@@ -23,7 +23,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." so `tests.conftest` resolves under a bare `pytest` too: `python -m pytest`
+# silently inserts the cwd and a plain `pytest` does not, so without this the
+# suite passes one way and fails collection the other.
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
