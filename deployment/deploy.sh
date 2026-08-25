@@ -281,12 +281,16 @@ schedule_job() {
 
 # Every five minutes: deliver any reminder that has come due. This is what makes
 # "tell me a few minutes after I leave" possible on a service that scales to zero.
-schedule_job omnistant-drain-nudges  "*/5 * * * *"   "/api/tasks/drain-nudges"
+# Cadences are overridable so the same jobs can run on a demo-length interval
+# for a recording. Cloud Scheduler's floor is one minute, so a 45-60s take
+# pairs "* * * * *" here with LEAVE_NUDGE_DELAY_MINUTES=0.5 on the service.
+# The defaults below are the production ones and must stay that way.
+schedule_job omnistant-drain-nudges  "${DRAIN_CRON:-*/5 * * * *}"   "/api/tasks/drain-nudges"
 # Ticks through the morning; the endpoint decides whether it is actually within
 # the window before this routine's *learned* departure time, and claims a
 # once-per-day mark so repeated ticks cannot notify twice.
-schedule_job omnistant-morning-brief "*/15 5-11 * * *" "/api/tasks/morning-brief"
-schedule_job omnistant-evening-recap "0 21 * * *"  "/api/tasks/evening-recap"
+schedule_job omnistant-morning-brief "${BRIEF_CRON:-*/15 5-11 * * *}" "/api/tasks/morning-brief"
+schedule_job omnistant-evening-recap "${RECAP_CRON:-0 21 * * *}"  "/api/tasks/evening-recap"
 
 say "Done"
 echo

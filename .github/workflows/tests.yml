@@ -31,3 +31,12 @@ jobs:
 
       - name: python -m pytest
         run: uv run python -m pytest -q
+
+      # The frontend has no build step and no package.json; node --test ships
+      # with Node, so the wake-word regressions cost one step and no dependency.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: node --test
+        run: node --test tests/js/*.test.js

@@ -28,6 +28,7 @@ from typing import Any
 from tools.vision import VisionResult, scan_frame
 from utils.cache import get_cache
 from utils.db import Observation, get_store
+from utils.location import get_current as current_location
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -131,7 +132,10 @@ async def observe_tick(
     """Process one frame from the watch loop."""
     now = datetime.now(timezone.utc)
     monotonic_now = time.time()
-    location = location or "here"
+    # "here" was what the camera knows; it is not something a person can use.
+    # The session's announced location is the honest answer, and the leave-scan
+    # workflow has already been told it.
+    location = location or await current_location(session_id)
 
     vision: VisionResult = await scan_frame(frame_data_url)
     if not vision.available:

@@ -37,6 +37,8 @@
   // UI showing "listening…" forever unless we time it out ourselves.
   var START_TIMEOUT_MS = 2500;
 
+  function now() { return Date.now(); }
+
   /* ---------------- speaking ---------------- */
   var Speaker = {
     _unlocked: false,
@@ -340,6 +342,7 @@
     this.onHeard = opts.onHeard || function () {};
     this.onStateChange = opts.onStateChange || function () {};
     this.onError = opts.onError || function () {};
+    this.onLog = opts.onLog || WakeWord.defaultLog;
     this.enabled = false;
     this.suspended = false;
     this.recognition = null;
@@ -347,7 +350,21 @@
     this.restartTimer = null;
   }
 
+  /* Consecutive failures, not lifetime ones. See the reset in `onend`. */
   WakeWord.MAX_FAILURES = 5;
+
+  /* A recognition session that stayed up this long was working, whatever
+   * happened at the end of it. Chrome routinely ends a healthy session after
+   * ~60s of silence; that is the engine's normal behaviour, not a fault. */
+  WakeWord.HEALTHY_SESSION_MS = 8000;
+
+  /* Lifecycle tracing. Off unless someone asks for it: this fires several times
+   * a minute during normal operation, so it must not spam a user's console by
+   * default. Set `window.OMNISTANT_DEBUG = true` before enabling the wake word. */
+  WakeWord.defaultLog = function (event, detail) {
+    if (!global.OMNISTANT_DEBUG || !global.console) { return; }
+    global.console.info('[wake] ' + event, detail);
+  };
 
   /* "Omni" is an invented word, so speech recognition never returns it the same
    * way twice — "omny", "omnie", "on me", "omani" are all things it produces for
@@ -376,15 +393,28 @@
     rec.interimResults = true;
     rec.maxAlternatives = 1;
 
+    // Per-session, not per-instance: whether *this* recogniser worked is the
+    // only thing that can clear a failure streak.
+    var startedAt = 0;
+    var errored = false;
+
+    rec.onstart = function () {
+      startedAt = now();
+      self._log('start', { failures: self.failures });
+    };
+
     rec.onresult = function (event) {
       if (self.suspended) { return; }
       for (var i = event.resultIndex; i < event.results.length; i++) {
         var text = event.results[i][0].transcript || '';
+        // A transcript of any kind proves the whole pipeline works: mic, engine,
+        // network, callback. Whatever went wrong before did not stick.
+        self.failures = 0;
         if (text.trim()) { self.onHeard(text.trim()); }
         if (self._matches(text)) {
-          self.failures = 0;
           // Hand the floor to the real recogniser rather than trying to parse
           // the command out of a stream tuned for a two-word trigger.
+          self._log('wake', { heard: text.trim() });
           self.suspend();
           self.onWake();
           return;
@@ -393,18 +423,32 @@
     };
 
     rec.onerror = function (event) {
+      self._log('error', { error: event.error, failures: self.failures });
       if (event.error === 'no-speech' || event.error === 'aborted') { return; }
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         self.disable();
         self.onError('Microphone access is blocked, so the wake word cannot listen.');
         return;
       }
+      errored = true;
       self.failures += 1;
     };
 
     rec.onend = function () {
+      var ranFor = startedAt ? now() - startedAt : 0;
+      // THE FIX. `failures` used to only ever go up: it was cleared on a wake
+      // match, on enable() and on resume(), and nowhere else. So five `network`
+      // blips spread across an hour of otherwise perfect listening would trip
+      // MAX_FAILURES and disable the wake word for good — the "kept failing"
+      // message, arriving after nothing had failed for forty minutes.
+      // A session that ran a healthy stretch and ended without error is the
+      // engine behaving normally, so it clears the streak.
+      if (!errored && ranFor >= WakeWord.HEALTHY_SESSION_MS) { self.failures = 0; }
+      self._log('end', { ranForMs: ranFor, errored: errored, failures: self.failures });
+
       if (!self.enabled) { self.onStateChange(false); return; }
       if (self.failures >= WakeWord.MAX_FAILURES) {
+        self._log('give-up', { failures: self.failures });
         self.disable();
         self.onError('Wake word kept failing, so I turned it off. Tap the mic to talk instead.');
         return;
@@ -412,10 +456,15 @@
       // Back off as failures accumulate; a tight restart loop on a broken
       // recogniser will flatten the battery and achieve nothing.
       var delay = self.failures ? Math.min(8000, 400 * Math.pow(2, self.failures)) : 250;
+      self._log('restart', { inMs: delay });
       self.restartTimer = global.setTimeout(function () { self._spin(); }, delay);
     };
 
     return rec;
+  };
+
+  WakeWord.prototype._log = function (event, detail) {
+    try { this.onLog(event, detail || {}); } catch (err) { /* tracing must never break listening */ }
   };
 
   WakeWord.prototype._spin = function () {
@@ -425,7 +474,10 @@
       this.recognition.start();
       this.onStateChange(true);
     } catch (err) {
+      // start() throws synchronously if the previous recogniser has not let go
+      // of the mic yet. That is a real failure, and it counts.
       this.failures += 1;
+      this._log('start-threw', { error: String(err), failures: this.failures });
       var self = this;
       this.restartTimer = global.setTimeout(function () { self._spin(); }, 1000);
     }
