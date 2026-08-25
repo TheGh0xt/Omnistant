@@ -43,7 +43,18 @@ class Config:
     api_key: str | None = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     use_vertex: bool = _flag("GOOGLE_GENAI_USE_VERTEXAI")
     gcp_project: str | None = os.getenv("GOOGLE_CLOUD_PROJECT")
-    gcp_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    # "global", not a region, and this is load-bearing: on Vertex the current
+    # Gemini models are served from the global endpoint only. Pointing this at
+    # us-central1 — the obvious default, and what it used to be — makes every
+    # model call 404 with "Publisher model ... was not found", while the service
+    # still boots, still answers /health, and still reports `gemini: configured`.
+    # Verified by probing generateContent per region:
+    #   gemini-3.5-flash        us-central1 404   global 200
+    #   gemini-3.1-flash-image  us-central1 404   global 200
+    #   gemini-2.5-flash        us-central1 200   global 200
+    # Older models being regionally available is what makes this trap quiet: a
+    # deployment pinned to 2.5 works, and upgrading the model breaks it.
+    gcp_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
 
     # --- Storage ------------------------------------------------------------
     database_url: str | None = os.getenv("DATABASE_URL")

@@ -112,6 +112,11 @@ only.
   once uncollectable under one of them while passing under the other. No secrets
   needed — the suite is hermetic.
 - **No rate limiting** on the public endpoints.
+- **`/health` reports Gemini as configured, not reachable.** It checks that
+  credentials exist, not that a model answers — which is how a Vertex region
+  misconfiguration passed the health check while 404ing every call. A real
+  `unreachable` state needs a live model call, which costs quota on every Cloud
+  Run probe, so it needs a cached result rather than a naive check.
 - **Location labels are stated intent, not position.** Saying "I'm heading to
   work" sets the label until the next announcement; if you then don't go, the
   observations are mislabelled. Real positioning needs the native app above.
