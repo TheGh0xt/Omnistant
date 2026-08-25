@@ -112,6 +112,15 @@ only.
   once uncollectable under one of them while passing under the other. No secrets
   needed — the suite is hermetic.
 - **No rate limiting** on the public endpoints.
+- **Location labels are stated intent, not position.** Saying "I'm heading to
+  work" sets the label until the next announcement; if you then don't go, the
+  observations are mislabelled. Real positioning needs the native app above.
+  `DEFAULT_LOCATION_LABEL` sets the resting label ("Home"), which is wrong for
+  anyone whose day does not start there.
+- **The wake word is verified by unit test, not on real devices.** The failure
+  counter is pinned by `tests/js/speech.test.js` against a stubbed engine. That
+  cannot tell you how Safari behaves — its continuous recognition is known-flaky,
+  and Firefox has no recognition at all.
 - **The evening recap has no delivery trigger tied to behaviour** — it is still a
   fixed 21:00, unlike the brief, which now learns.
 

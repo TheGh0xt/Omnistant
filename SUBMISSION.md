@@ -88,9 +88,8 @@ Four bugs that all failed *quietly*, because the system degrades gracefully:
   production silently fell back to in-memory — the fix undone by packaging.
 
 That last one was caught by making `/health` name the backend in use instead of
-saying "up". The two backend bugs have regression tests; the two browser ones are
-fixed in `src/frontend/speech.js`, where the reasoning sits in comments at the
-fix site — the repo has no JS test runner.
+saying "up". All four have regression tests — the browser ones under `node --test`,
+which ships with Node and needs no `package.json`.
 
 ## What we learned
 
