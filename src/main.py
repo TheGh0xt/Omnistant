@@ -12,7 +12,9 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -30,7 +32,9 @@ from utils.config import get_config, tz
 from utils.db import Routine, close_store, get_store, init_store, normalize_subject
 from utils.errors import ModelQuotaError
 from utils.logger import configure_logging, get_logger
+from utils.location import default_label as default_location_label
 from utils.notify import Notification, get_notifier, init_notifier
+from utils.notify_format import Line, daily_recap, item_status, leaving_without
 
 cfg = get_config()
 configure_logging(cfg.log_level)
@@ -360,7 +364,43 @@ def _brief_window(typical_time: str | None) -> tuple[int, int] | None:
 BRIEF_LEAD_MINUTES = 25
 
 
+def timed_job(job: str):
+    """Log a scheduled job's start and finish, with a duration.
+
+    The autonomous loop is the whole "agent" claim, and it runs with nobody
+    watching. Before recording a demo it has to be possible to answer "does the
+    entire loop finish inside the window?" from the logs rather than by filming
+    it and hoping:
+
+        gcloud run services logs read omnistant --region us-central1 \
+          | grep "scheduler job"
+
+    `functools.wraps` matters here and is not decoration: FastAPI resolves a
+    route's dependencies and query parameters from its signature, and follows
+    `__wrapped__` to find it. Without it every endpoint below would lose its
+    parameters and its task-token guard.
+    """
+
+    def decorate(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            started = perf_counter()
+            log.info("scheduler job start", extra={"job": job})
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                log.info(
+                    "scheduler job done",
+                    extra={"job": job, "duration_ms": round((perf_counter() - started) * 1000)},
+                )
+
+        return wrapper
+
+    return decorate
+
+
 @app.post("/api/tasks/morning-brief", dependencies=[Depends(require_task_token)])
+@timed_job("morning-brief")
 async def task_morning_brief(user_id: str | None = None, force: bool = False) -> dict[str, Any]:
     """Unprompted: shortly before you usually leave, say what today needs.
 
@@ -416,13 +456,12 @@ async def task_morning_brief(user_id: str | None = None, force: bool = False) ->
         Notification(
             title=f"Before you leave for {primary.routine_name}",
             body=message,
-            facts=(
-                [("Can't vouch for", ", ".join(u["item"] for u in unverified)),
-                 ("Usually taken", ", ".join(primary.expected_items))]
-                if unverified
-                else [("Usually taken", ", ".join(primary.expected_items))]
-            ),
             urgent=bool(unverified),
+            block=item_status(
+                destination=primary.routine_name,
+                unverified=[u["item"] for u in unverified],
+                expected=primary.expected_items,
+            ),
         )
     )
 
@@ -438,6 +477,7 @@ async def task_morning_brief(user_id: str | None = None, force: bool = False) ->
 
 
 @app.post("/api/tasks/drain-nudges", dependencies=[Depends(require_task_token)])
+@timed_job("drain-nudges")
 async def task_drain_nudges() -> dict[str, Any]:
     """Deliver reminders that have come due.
 
@@ -501,12 +541,13 @@ async def task_drain_nudges() -> dict[str, Any]:
                     f"You headed to {payload.get('routine', 'out')} {when} without your "
                     f"{names}. Still close enough to turn back?"
                 ),
-                facts=(
-                    [("Missing", names)]
-                    + ([("Last seen", "\n".join(last_seen))] if last_seen else [])
-                    + [("Left from", payload.get("origin", "home"))]
-                ),
                 urgent=True,
+                block=leaving_without(
+                    destination=str(payload.get("routine", "out")),
+                    missing=still_missing,
+                    last_seen=last_seen,
+                    when=when,
+                ),
             )
         )
         await store.close_nudge(nudge["id"], sent=True)
@@ -517,7 +558,16 @@ async def task_drain_nudges() -> dict[str, Any]:
     return {"triggered": True, "due": len(due), "sent": sent, "cancelled": cancelled}
 
 
+def _day_label(iso_day: str) -> str:
+    """"2026-08-24" -> "Aug 24". A header is not the place for an ISO date."""
+    try:
+        return datetime.strptime(iso_day, "%Y-%m-%d").strftime("%b %-d")
+    except ValueError:
+        return iso_day
+
+
 @app.post("/api/tasks/evening-recap", dependencies=[Depends(require_task_token)])
+@timed_job("evening-recap")
 async def task_evening_recap(user_id: str | None = None) -> dict[str, Any]:
     """Unprompted: at the end of the day, reconstruct it and surface loose ends."""
     uid = _user(user_id)
@@ -531,10 +581,15 @@ async def task_evening_recap(user_id: str | None = None) -> dict[str, Any]:
             Notification(
                 title="Your day",
                 body=timeline.narrative,
-                facts=[
-                    ("Observations", str(len(timeline.entries))),
-                    ("Places", ", ".join(dict.fromkeys(places)) or "none recorded"),
-                ],
+                block=daily_recap(
+                    day_label=_day_label(timeline.day),
+                    where=", ".join(dict.fromkeys(places)) or default_location_label(),
+                    lines=[
+                        Line(time_str=e.to_dict()["time"], kind=e.kind, subject=e.subject, detail=e.detail)
+                        for e in timeline.entries
+                    ],
+                    count=len(timeline.entries),
+                ),
             )
         )
 

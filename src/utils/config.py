@@ -81,6 +81,19 @@ class Config:
     # day. So it errs early.
     leave_nudge_delay_minutes: float = float(os.getenv("LEAVE_NUDGE_DELAY_MINUTES", "2"))
 
+    # Narrating the day costs a Gemini round trip. The Slack recap no longer
+    # needs it — those bullets are built from the log — so it can be turned off
+    # when the recap has to complete inside a demo-length window. The API and UI
+    # still get a narrative either way; without the model it is the
+    # deterministic one.
+    recap_narrate: bool = _flag("RECAP_NARRATE", True)
+
+    # The resting location label, used until the user announces going somewhere.
+    # "Home" is the right baseline for most people's morning, and wrong for
+    # anyone whose day does not start there — hence configurable. Set it to ""
+    # to have the agent say "Unknown location" rather than assume.
+    default_location_label: str = os.getenv("DEFAULT_LOCATION_LABEL", "Home")
+
     @property
     def genai_available(self) -> bool:
         """True when we can actually reach a Gemini model."""
