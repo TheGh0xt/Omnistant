@@ -20,6 +20,7 @@ import httpx
 
 from .config import get_config
 from .logger import get_logger
+from .notify_format import Block
 
 log = get_logger(__name__)
 
@@ -39,8 +40,15 @@ class Notification:
     facts: list[tuple[str, str]] = field(default_factory=list)
     # Something went wrong / needs attention, as opposed to an all-clear.
     urgent: bool = False
+    # Preferred over title/body/facts when present: a pre-formatted block in the
+    # house style (see notify_format). The older fields stay because `send` must
+    # keep working for any caller that has not been moved across, and because
+    # `text` still has to carry a plain fallback either way.
+    block: Block | None = None
 
     def as_plain_text(self) -> str:
+        if self.block is not None:
+            return self.block.to_plain()[:MAX_TEXT]
         lines = [self.title, "", self.body]
         if self.facts:
             lines.append("")
@@ -87,6 +95,18 @@ class SlackNotifier(Notifier):
         self._url = webhook_url
 
     def _blocks(self, note: Notification) -> list[dict[str, Any]]:
+        if note.block is not None:
+            # One mrkdwn section, not a header block: Slack's `header` type is
+            # plain_text only, so it cannot carry the emoji-plus-bold anchor the
+            # house style opens with, and it forces a second block just to say
+            # where you are.
+            return [
+                {"type": "section", "text": {"type": "mrkdwn", "text": note.block.to_mrkdwn()[:MAX_TEXT]}},
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": "Omnistant · sent automatically"}],
+                },
+            ]
         blocks: list[dict[str, Any]] = [
             {
                 "type": "header",
