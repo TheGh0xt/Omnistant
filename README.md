@@ -207,7 +207,7 @@ uv run pytest -q
 node --test tests/js/*.test.js
 ```
 
-**Expect:** `144 passed` in well under a second, then `pass 7` from the frontend
+**Expect:** `151 passed` in well under a second, then `pass 7` from the frontend
 suite. The JS tests need no dependencies — `node --test` is built into Node, and
 there is deliberately no `package.json` in this repo.
 
@@ -481,7 +481,7 @@ src/
 ## Tests
 
 ```bash
-uv run pytest -q          # 144 tests, ~0.6s
+uv run pytest -q          # 151 tests, ~0.6s
 node --test tests/js/*.test.js   # 7 wake-word regressions, no deps
 ```
 

@@ -164,6 +164,50 @@ drain tick), so budget the take accordingly rather than assuming 45s.
 
 ---
 
+### Aug 25 — the Vertex switch was green and broken
+
+Moved the deployed service off the AI Studio key onto Vertex AI, so model calls
+draw on Google Cloud billing instead of the free tier's 20 vision requests a day
+— which would have died mid-recording.
+
+Env vars set, revision deployed, container healthy, `/health` returning
+`"status": "ok"` and `"gemini": "configured"`. Every model call returned 500.
+
+*Root cause:* `GOOGLE_CLOUD_LOCATION` defaulted to `us-central1`, matching the
+region everything else is deployed to. Vertex does not serve the current Gemini
+models from regional endpoints. Probed:
+
+| Model | us-central1 | global |
+|---|---|---|
+| `gemini-3.5-flash` | 404 | 200 |
+| `gemini-3.1-flash-image` | 404 | 200 |
+| `gemini-2.5-flash` | 200 | 200 |
+
+That last row is what makes it quiet: an older model *is* regionally available,
+so a deployment pinned to 2.5 works and upgrading the model breaks it, with no
+change to any of the code that would explain why.
+
+*Fix:* default to `global`, with the probe table in the comment so the next
+person to "tidy" it back to a region has to read the evidence first.
+
+*Same shape as everything else in this log.* `/health` reports whether Gemini is
+*configured* — an env var being set — not whether it can be *reached*. It was
+the health check's own blind spot, in the one subsystem the health check was
+originally written to expose. A `gemini: "unreachable (404)"` state would have
+caught this on deploy; that is on the roadmap now rather than done, because
+adding a live model call to a liveness probe costs quota on every Cloud Run
+health check and needs thinking about.
+
+*Method note, worth keeping:* the first probe reported 404 for every model in
+every region, which would have led to the wrong conclusion entirely. That was a
+zsh bug in the probe script, not the API — `$MODEL:generateContent` triggers
+zsh's `:g` history modifier and silently mangles the URL to
+`.../models/5-flashnerateContent`. Use `${MODEL}:generateContent`. Check the URL
+your script actually built before believing what it tells you about someone
+else's system.
+
+---
+
 ## Build Status
 
 - [x] Day 1-2: Agent engine + workflow setup

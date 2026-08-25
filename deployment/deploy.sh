@@ -35,14 +35,26 @@ TIMEZONE="${TIMEZONE:-Europe/London}"
 # session service this had to be 1, or turn two would forget turn one.
 MAX_INSTANCES="${MAX_INSTANCES:-4}"
 GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
+# Vertex AI rather than an AI Studio key, so model calls bill to this project
+# instead of the free tier's 20 vision requests a day — which is not enough to
+# record a demo. USE_VERTEX=0 falls back to the key.
+#
+# VERTEX_LOCATION is "global" and not a region on purpose: Vertex serves the
+# current Gemini models from the global endpoint only, and pointing this at
+# us-central1 makes every model call 404 while the service still boots and still
+# reports itself healthy. See src/utils/config.py for the probe table.
+USE_VERTEX="${USE_VERTEX:-1}"
+VERTEX_LOCATION="${VERTEX_LOCATION:-global}"
 
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "ERROR: no project set. Run: gcloud config set project YOUR_PROJECT_ID" >&2
   exit 1
 fi
 
-if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-  echo "ERROR: export GEMINI_API_KEY before running this script." >&2
+# Only needed when not using Vertex: with ADC the runtime service account is the
+# credential and there is no key to pass.
+if [[ -z "${GEMINI_API_KEY:-}" && "${USE_VERTEX}" != "1" ]]; then
+  echo "ERROR: export GEMINI_API_KEY, or leave USE_VERTEX=1 to use Vertex AI." >&2
   exit 1
 fi
 
@@ -78,6 +90,7 @@ gcloud services enable \
   secretmanager.googleapis.com \
   cloudscheduler.googleapis.com \
   artifactregistry.googleapis.com \
+  aiplatform.googleapis.com \
   sql-component.googleapis.com
 
 # --- 2. Secrets ------------------------------------------------------------
@@ -199,11 +212,24 @@ fi
 # history. They go through Secret Manager instead; only non-sensitive settings
 # travel as plain env vars.
 create_secret omnistant-database-url "${DATABASE_URL}"
-SECRETS="GEMINI_API_KEY=gemini-api-key:latest"
-SECRETS+=",TASK_TOKEN=omnistant-task-token:latest"
+SECRETS="TASK_TOKEN=omnistant-task-token:latest"
 SECRETS+=",DATABASE_URL=omnistant-database-url:latest"
+[[ -n "${GEMINI_API_KEY:-}" ]] && SECRETS+=",GEMINI_API_KEY=gemini-api-key:latest"
 
 ENV_VARS="GEMINI_MODEL=${GEMINI_MODEL},TIMEZONE=${TIMEZONE},LOG_LEVEL=INFO"
+
+# --set-env-vars REPLACES the whole set rather than merging into it, so anything
+# configured by hand on a previous revision is silently dropped by the next
+# deploy. That is how a working Vertex deployment reverts to the free tier
+# without a single error: every var it needs has to be set here, every time.
+if [[ "${USE_VERTEX}" == "1" ]]; then
+  ENV_VARS+=",GOOGLE_GENAI_USE_VERTEXAI=true"
+  ENV_VARS+=",GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
+  ENV_VARS+=",GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}"
+  say "Gemini via Vertex AI (${VERTEX_LOCATION}) — billed to ${PROJECT_ID}"
+else
+  warn "Gemini via AI Studio key — free tier is 20 vision requests/day"
+fi
 
 # Where the scheduled jobs deliver their results. A webhook URL is itself the
 # credential — anyone holding it can post to the channel — so it is a secret.
