@@ -25,6 +25,8 @@ from utils.cache import get_cache
 from utils.config import get_config, tz
 from utils.db import Observation, Routine, Store, get_store, normalize_subject
 from utils.gemini import get_client
+from utils.location import get_current as current_location
+from utils.location import set_current as set_current_location
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -235,7 +237,9 @@ async def leave_detection(
     store = get_store()
     cache = get_cache()
     now = datetime.now(timezone.utc)
-    origin = origin or "home"
+    # Where they are *now* — the scan happens before they walk out, so the items
+    # it sees are still at the origin. Falls back to the configured home base.
+    origin = origin or await current_location(session_id)
 
     routine, is_new = await _resolve_routine(store, user_id, destination)
     expected = [normalize_subject(i) for i in routine.expected_items]
@@ -302,6 +306,11 @@ async def leave_detection(
             scanned_at=now,
         )
         await _refine_routine(store, user_id, routine)
+
+        # The transition the user just announced in words. Everything observed
+        # from here until the next announcement belongs to the destination, not
+        # to the room the camera happens to be in.
+        await set_current_location(session_id, routine.routine_name)
 
         # A reminder is only useful if it arrives when you can still act on it.
         # Telling someone at 08:00 that they might forget their keys is a
@@ -570,7 +579,11 @@ def _deterministic_narrative(entries: list[TimelineEntry]) -> str:
 
 
 async def daily_timeline(
-    *, user_id: str, day: Date | None = None, question: str | None = None
+    *,
+    user_id: str,
+    day: Date | None = None,
+    question: str | None = None,
+    narrate: bool | None = None,
 ) -> TimelineResult:
     """Workflow 3: reconstruct the day from the observation log.
 
@@ -614,7 +627,11 @@ async def daily_timeline(
         )
         return result
 
-    client = get_client()
+    # A question always needs the model — answering it from the log is the whole
+    # point of asking. An unprompted recap does not.
+    if narrate is None:
+        narrate = get_config().recap_narrate or bool(question)
+    client = get_client() if narrate else None
     if client is None:
         result.narrative = result.speech = _deterministic_narrative(entries)
         return result
