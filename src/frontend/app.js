@@ -147,7 +147,35 @@
 
   function onGlobeSelect() { /* tooltip is drawn by the globe itself */ }
 
+  /* Swapping the details panel against the workflow panel is a phone
+   * compromise: on a narrow screen only one of them fits. Applied to a desktop
+   * grid that is already two columns wide it just hides things for no reason —
+   * the observation list, its confidence figures and the item/activity filters
+   * were all sealed behind an "Expand" button on a 1440px screen with room to
+   * spare, which reads as the globe having no data at all. */
+  var wide = window.matchMedia('(min-width: 800px)');
+
+  function applyLayout() {
+    if (wide.matches) {
+      els.globeDetails.hidden = false;
+      els.workflow.hidden = false;
+      els.expandGlobe.hidden = true;         // nothing left to expand
+    } else {
+      els.expandGlobe.hidden = false;
+      els.globeDetails.hidden = true;
+      els.workflow.hidden = false;
+      els.expandGlobe.textContent = 'Expand';
+      els.expandGlobe.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  // Rotating a tablet crosses this breakpoint, so it cannot be a one-shot.
+  if (wide.addEventListener) { wide.addEventListener('change', applyLayout); }
+  else if (wide.addListener) { wide.addListener(applyLayout); }   // older Safari
+  applyLayout();
+
   els.expandGlobe.addEventListener('click', function () {
+    if (wide.matches) { return; }            // both panels are already showing
     var opening = els.globeDetails.hidden;
     els.globeDetails.hidden = !opening;
     els.workflow.hidden = opening;
