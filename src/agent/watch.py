@@ -137,6 +137,14 @@ async def observe_tick(
     # workflow has already been told it.
     location = location or await current_location(session_id)
 
+    # The watch loop is the only thing holding a live camera frame, so it is the
+    # only thing that can leave one for the leave scan to use. `/api/frame` used
+    # to do this and the frontend no longer calls it; without this line the frame
+    # cache stays empty however long the camera runs, `leave_detection` finds
+    # nothing to scan, and the reminder it would have queued is never queued.
+    # Cached before the scan, so a rate-limited tick still leaves a usable frame.
+    await get_cache().put_frame(session_id, frame_data_url)
+
     vision: VisionResult = await scan_frame(frame_data_url)
     if not vision.available:
         return WatchTick(available=False, note=vision.note)

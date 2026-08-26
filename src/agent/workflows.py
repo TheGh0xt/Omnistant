@@ -294,7 +294,13 @@ async def leave_detection(
     def _is_present(want: str) -> bool:
         return any(want in got or got in want for got in found_keys)
 
-    missing_keys = [i for i in expected if not _is_present(i)]
+    # A scan with no usable frame did not look, which is not the same as looking
+    # and seeing nothing. Deriving "missing" from an empty `found_keys` produced a
+    # confident list of every expected item backed by no evidence — and it is what
+    # hid a broken frame path for an entire demo: the `if vision.available` guard
+    # below skipped the reminder while the UI still displayed six items missing,
+    # so the failure looked exactly like a successful scan.
+    missing_keys = [i for i in expected if not _is_present(i)] if vision.available else []
     extra_keys = [
         i.key for i in vision.items if not any(i.key in e or e in i.key for e in expected)
     ]
