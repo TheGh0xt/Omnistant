@@ -468,6 +468,29 @@ async def leave_detection(
     return result
 
 
+# Departures this far apart are different trips, not variations of one.
+CLUSTER_SPAN_MINUTES = 90
+
+
+def _typical_minutes(minutes: Sequence[int]) -> int | None:
+    """When this trip actually happens: the middle of the tightest group.
+
+    A plain median over every recent scan is dragged hours away by a single trip
+    at another time of day — one evening departure among a week of 8am ones puts
+    the "typical time" in the afternoon, and the brief window then sits on a time
+    the user never leaves. So find the largest group of departures that fall
+    within CLUSTER_SPAN_MINUTES of each other and take the middle of that.
+    """
+    if not minutes:
+        return None
+    best: list[int] = []
+    for anchor in minutes:
+        near = [m for m in minutes if abs(m - anchor) <= CLUSTER_SPAN_MINUTES]
+        if len(near) > len(best):
+            best = near
+    return sorted(best)[len(best) // 2]
+
+
 async def _refine_routine(store: Store, user_id: str, routine: Routine) -> None:
     """Learn from repetition.
 
@@ -489,9 +512,9 @@ async def _refine_routine(store: Store, user_id: str, routine: Routine) -> None:
             for s in relevant
             if s.get("scanned_at")
         )
-        if minutes:
-            median = minutes[len(minutes) // 2]
-            routine.typical_time = f"{median // 60:02d}:{median % 60:02d}"
+        typical = _typical_minutes(minutes)
+        if typical is not None:
+            routine.typical_time = f"{typical // 60:02d}:{typical % 60:02d}"
     if len(relevant) >= 3:
         counts: dict[str, int] = {}
         for scan in relevant:

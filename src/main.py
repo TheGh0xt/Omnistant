@@ -377,12 +377,21 @@ def _brief_window(typical_time: str | None) -> tuple[int, int] | None:
         departs = int(hh) * 60 + int(mm)
     except (ValueError, TypeError):
         return None
-    return max(0, departs - BRIEF_LEAD_MINUTES), departs
+    return max(0, departs - BRIEF_LEAD_MINUTES), min(24 * 60 - 1, departs + BRIEF_GRACE_MINUTES)
 
 
 # The brief is worth sending in the run-up to leaving, not at a fixed hour. This
 # is how long before the learned departure time the window opens.
 BRIEF_LEAD_MINUTES = 25
+
+# ...and how long after it stays open.
+#
+# A window that closed exactly on the learned time could be missed entirely: the
+# departure time is a *median that moves* every time you scan, so it can step
+# past a tick that had not yet qualified, and the once-a-day claim then means no
+# brief at all that day. That is what happened on 26 Aug — ticks every 15 minutes
+# from 08:15Z to 10:45Z, every one of them skipped, zero briefs delivered.
+BRIEF_GRACE_MINUTES = 15
 
 
 def timed_job(job: str):
