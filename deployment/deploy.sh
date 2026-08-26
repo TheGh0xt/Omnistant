@@ -58,10 +58,15 @@ VERTEX_LOCATION="${VERTEX_LOCATION:-global}"
 if [[ "${DEMO_MODE:-0}" == "1" ]]; then
   NUDGE_DELAY="${NUDGE_DELAY:-0.5}"
   DRAIN_CRON="${DRAIN_CRON:-* * * * *}"      # Cloud Scheduler's floor
+  # All day, not just the morning. The production window exists because nobody
+  # leaves for work at 4pm; a demo is recorded whenever it is recorded, and a
+  # brief that cannot tick after 11:59 simply does not exist that afternoon.
+  BRIEF_CRON="${BRIEF_CRON:-*/5 * * * *}"
   RECAP_NARRATE="${RECAP_NARRATE:-false}"
 else
   NUDGE_DELAY="${NUDGE_DELAY:-2}"
   DRAIN_CRON="${DRAIN_CRON:-*/5 * * * *}"
+  BRIEF_CRON="${BRIEF_CRON:-*/15 5-11 * * *}"
   RECAP_NARRATE="${RECAP_NARRATE:-true}"
 fi
 
@@ -337,7 +342,7 @@ schedule_job omnistant-drain-nudges  "${DRAIN_CRON}"   "/api/tasks/drain-nudges"
 # Ticks through the morning; the endpoint decides whether it is actually within
 # the window before this routine's *learned* departure time, and claims a
 # once-per-day mark so repeated ticks cannot notify twice.
-schedule_job omnistant-morning-brief "${BRIEF_CRON:-*/15 5-11 * * *}" "/api/tasks/morning-brief"
+schedule_job omnistant-morning-brief "${BRIEF_CRON}" "/api/tasks/morning-brief"
 schedule_job omnistant-evening-recap "${RECAP_CRON:-0 21 * * *}"  "/api/tasks/evening-recap"
 
 say "Done"

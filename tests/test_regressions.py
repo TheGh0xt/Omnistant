@@ -257,3 +257,52 @@ def test_a_thing_put_down_is_never_read_as_a_thing_worn(detail):
     from agent.workflows import _is_on_person
 
     assert _is_on_person(detail) is False, detail
+
+
+def test_one_evening_trip_does_not_drag_the_morning_departure_time():
+    """The brief window sits on the learned departure time, so that time has to
+    describe a real routine.
+
+    A plain median over every recent scan put "typical" in the afternoon after a
+    single evening trip among a week of 8am ones. The window then covered a time
+    the user never leaves, every 15-minute tick skipped, and the brief delivered
+    nothing at all -- zero in 24 hours on 26 Aug.
+    """
+    from agent.workflows import _typical_minutes
+
+    morning = [8 * 60 + 2, 8 * 60 + 11, 8 * 60 + 15, 8 * 60 + 24]
+    evening = [19 * 60 + 30]
+
+    assert _typical_minutes(sorted(morning + evening)) == 8 * 60 + 15
+
+
+def test_the_departure_time_still_tracks_a_genuine_shift():
+    """Clustering must not freeze the learned time; it only rejects outliers."""
+    from agent.workflows import _typical_minutes
+
+    assert _typical_minutes([9 * 60, 9 * 60 + 20, 9 * 60 + 40]) == 9 * 60 + 20
+    assert _typical_minutes([]) is None
+    assert _typical_minutes([7 * 60]) == 7 * 60
+
+
+def test_the_brief_window_stays_open_past_the_learned_time():
+    """A window closing exactly on a moving median can be stepped over entirely.
+
+    The departure time is recomputed on every scan, so it can advance past a tick
+    that had not yet qualified. With the once-a-day claim, missing the window
+    once means no brief that day.
+    """
+    from main import BRIEF_GRACE_MINUTES, BRIEF_LEAD_MINUTES, _brief_window
+
+    opens, closes = _brief_window("08:45")
+
+    assert opens == 8 * 60 + 45 - BRIEF_LEAD_MINUTES
+    assert closes == 8 * 60 + 45 + BRIEF_GRACE_MINUTES
+    assert opens < 8 * 60 + 45 < closes, "the departure moment itself must be inside"
+
+
+def test_the_brief_window_is_unset_until_a_departure_is_learned():
+    from main import _brief_window
+
+    assert _brief_window(None) is None
+    assert _brief_window("not a time") is None
