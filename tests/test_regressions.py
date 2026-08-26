@@ -11,7 +11,7 @@ import importlib
 import pytest
 
 from agent.workflows import daily_timeline, item_recall
-from tests.conftest import USER
+from tests.conftest import SESSION, USER
 
 
 async def test_recall_ignores_items_named_in_a_leave_scans_missing_list(store, make_observation):
@@ -76,3 +76,55 @@ def test_no_circular_imports_regardless_of_entry_point():
     """
     for module in ("agent.workflows", "tools.registry", "tools.vision", "agent.engine", "main"):
         importlib.import_module(module)
+
+
+async def test_the_watch_loop_leaves_a_frame_the_leave_scan_can_use(store, cache, monkeypatch):
+    """The watch loop is the only thing holding a camera frame. It must stash it.
+
+    `/api/frame` was the endpoint whose whole job was caching the current frame,
+    and the continuous-observation rewrite stopped the frontend calling it. The
+    watch loop replaced it on screen but not in the cache, so `leave_detection`
+    fell back to `cache.get_frame()` and got nothing — which made
+    `vision.available` False, which skipped the one `enqueue_nudge` call in the
+    codebase. The scan still announced every expected item as missing, so it
+    looked right on camera while queueing no reminder at all.
+    """
+    from agent import watch as watch_module
+    from agent.watch import observe_tick
+    from tools.vision import DetectedItem, VisionResult
+
+    async def fake_scan(_url: str) -> VisionResult:
+        return VisionResult(
+            items=[DetectedItem(name="phone", confidence=0.9, detail="on the desk")],
+            scene="desk",
+        )
+
+    monkeypatch.setattr(watch_module, "scan_frame", fake_scan)
+
+    frame = "data:image/jpeg;base64,/9j/stub"
+    await observe_tick(user_id=USER, session_id=SESSION, frame_data_url=frame, location="desk")
+
+    assert await cache.get_frame(SESSION) == frame
+
+
+async def test_a_blind_scan_does_not_claim_everything_is_missing(store, cache, work_routine, monkeypatch):
+    """No frame means we did not look. That is not the same as seeing nothing.
+
+    With `found_keys` empty, every expected item fell out as "missing", so the
+    agent confidently listed six things it had no evidence about — while the
+    `if vision.available:` guard silently skipped the observations, the routine
+    refinement and the reminder.
+    """
+    from agent.workflows import leave_detection
+
+    await store.upsert_routine(work_routine)
+
+    # No frame passed and nothing in the cache: the scan is blind.
+    result = await leave_detection(user_id=USER, session_id=SESSION, destination="work")
+
+    assert result.vision_available is False
+    assert result.missing == [], "a blind scan has no evidence anyone is missing anything"
+    assert result.note, "a blind scan must say why it could not answer"
+    # Saying what they normally take is still useful; asserting six items are
+    # missing is not. Only the second one is the bug.
+    assert "missing" not in result.speech.lower()
