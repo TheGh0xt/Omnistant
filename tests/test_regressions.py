@@ -7,6 +7,7 @@ not a hypothetical.
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -128,3 +129,91 @@ async def test_a_blind_scan_does_not_claim_everything_is_missing(store, cache, w
     # Saying what they normally take is still useful; asserting six items are
     # missing is not. Only the second one is the bug.
     assert "missing" not in result.speech.lower()
+
+
+# The demo notification said "Missing: airpods" and then, two lines below,
+# "AirPods — Home, in the person's right ear". One message, contradicting itself.
+ON_PERSON = "in the person's right ear"
+STUB_FRAME = "data:image/jpeg;base64,/9j/stub"
+
+
+@pytest.fixture
+def blind_camera(monkeypatch):
+    """A camera pointed at a desk that holds none of the expected items."""
+    from agent import workflows as wf
+    from tools.vision import VisionResult
+
+    async def sees_nothing(_url: str):
+        return VisionResult(items=[], scene="an empty desk")
+
+    monkeypatch.setattr(wf, "scan_frame", sees_nothing)
+
+
+async def _scan(destination: str = "work"):
+    from agent.workflows import leave_detection
+
+    return await leave_detection(
+        user_id=USER, session_id=SESSION, destination=destination, frame_data_url=STUB_FRAME
+    )
+
+
+async def test_an_item_on_your_person_is_not_missing(
+    store, cache, work_routine, blind_camera, make_observation
+):
+    """AirPods in your ear are not missing, and the log already knows it.
+
+    The scan compared the routine against what the camera can see *right now*,
+    so anything you had already put on fell out as missing — while the very same
+    notification quoted the sighting that proved you were wearing it.
+    """
+    await store.upsert_routine(work_routine)
+    await store.add_observation(make_observation("airpods", detail=ON_PERSON, minutes_ago=50))
+
+    result = await _scan()
+
+    assert "airpods" not in [m.item for m in result.missing]
+    assert "airpods" in [c.item for c in result.carried]
+
+
+async def test_a_stale_on_person_sighting_is_not_proof_you_have_it(
+    store, cache, work_routine, blind_camera, make_observation
+):
+    """Worn three days ago says nothing about this morning."""
+    await store.upsert_routine(work_routine)
+    await store.add_observation(
+        make_observation("airpods", detail=ON_PERSON, minutes_ago=3 * 24 * 60)
+    )
+
+    result = await _scan()
+
+    assert "airpods" in [m.item for m in result.missing]
+    assert result.carried == []
+
+
+async def test_an_item_left_on_the_desk_is_still_missing(
+    store, cache, work_routine, blind_camera, make_observation
+):
+    """The check is "on you", not "seen recently". A desk is not a pocket."""
+    await store.upsert_routine(work_routine)
+    await store.add_observation(
+        make_observation("wallet", detail="on the right side of the desk", minutes_ago=5)
+    )
+
+    result = await _scan()
+
+    assert "wallet" in [m.item for m in result.missing]
+    assert result.carried == []
+
+
+async def test_the_reminder_does_not_name_what_you_are_wearing(
+    store, cache, work_routine, blind_camera, make_observation
+):
+    """The queued nudge is what reaches Slack, so it must agree with the scan."""
+    await store.upsert_routine(work_routine)
+    await store.add_observation(make_observation("airpods", detail=ON_PERSON, minutes_ago=50))
+
+    await _scan()
+
+    queued = await store.due_nudges(datetime.now(timezone.utc) + timedelta(hours=1))
+    assert len(queued) == 1
+    assert "airpods" not in queued[0]["payload"]["missing"]

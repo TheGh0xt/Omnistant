@@ -50,19 +50,31 @@ function load() {
     speak(u) { this.queue.push(u.text); },
     cancel() { this.cancels += 1; },
   };
+  // Timers are recorded rather than run, so a test can fire one deliberately.
+  // Nothing fires on its own, which is what the rest of these tests assume.
+  const timers = [];
   const win = {
     SpeechRecognition: FakeRecognition,
     SpeechSynthesisUtterance: FakeUtterance,
     speechSynthesis: synth,
     navigator: { language: 'en-GB' },
-    setTimeout: () => 0,
-    clearTimeout: () => {},
+    setTimeout: (fn, ms) => timers.push({ fn, ms, cancelled: false }),
+    clearTimeout: (id) => { if (timers[id - 1]) { timers[id - 1].cancelled = true; } },
     console: { warn() {} },
   };
   // `'speechSynthesis' in global` must be true for Speaker.isSupported().
   new Function('window', SRC)(win);
   win.__synth = synth;
+  win.__timers = timers;
   return win;
+}
+
+/* Run the pending timer scheduled for `ms`, the way the browser eventually would. */
+function fireTimer(win, ms) {
+  const timer = win.__timers.find((t) => t.ms === ms && !t.cancelled);
+  assert.ok(timer, `expected a timer scheduled for ${ms}ms`);
+  timer.cancelled = true;
+  timer.fn();
 }
 
 function latest() { return FakeRecognition.instances[FakeRecognition.instances.length - 1]; }
@@ -148,4 +160,51 @@ test('unlock is idempotent and reports itself', () => {
   const after = win.__synth.queue.length;
   win.Speaker.unlock();
   assert.strictEqual(win.__synth.queue.length, after, 'unlock must not re-speak');
+});
+
+test('a transcript captured when the deadline stops the mic is still sent', async () => {
+  // The 20s deadline exists precisely because "some browsers never fire onend".
+  // Its own cleanup then called abandon(), which aborts the recogniser and
+  // throws the captured transcript away -- so on exactly the browsers the
+  // deadline was written for, the user watched their words appear and nothing
+  // was ever sent. abort() firing onend is not something we get to rely on.
+  const win = load();
+  const sent = [];
+  const errors = [];
+  const l = new win.Listener({ onResult: (t) => sent.push(t), onError: (m) => errors.push(m) });
+  await l.start();
+
+  latest().emitInterim('I am heading out to work');
+  fireTimer(win, 20000);       // the hard deadline, with no final ever arriving
+
+  assert.deepStrictEqual(sent, ['I am heading out to work']);
+  assert.deepStrictEqual(errors, [], 'it heard something, so it must not claim otherwise');
+});
+
+test('stopping a recogniser that never started still sends what was heard', async () => {
+  // stop() falls through to abandon() whenever the engine is not in its
+  // listening state -- same silent drop, reached by tapping the mic to stop.
+  const win = load();
+  const sent = [];
+  const l = new win.Listener({ onResult: (t) => sent.push(t), onError: () => {} });
+  await l.start();
+
+  latest().emitInterim('where are my keys');
+  l.listening = false;         // engine never confirmed it was running
+  l.stop();
+
+  assert.deepStrictEqual(sent, ['where are my keys']);
+});
+
+test('the deadline still reports silence when nothing was heard', async () => {
+  const win = load();
+  const sent = [];
+  const errors = [];
+  const l = new win.Listener({ onResult: (t) => sent.push(t), onError: (m) => errors.push(m) });
+  await l.start();
+
+  fireTimer(win, 20000);
+
+  assert.deepStrictEqual(sent, []);
+  assert.strictEqual(errors.length, 1, 'twenty seconds of silence deserves a word');
 });

@@ -145,6 +145,9 @@ class LeaveScanResult:
     expected: list[str] = field(default_factory=list)
     found: list[dict[str, Any]] = field(default_factory=list)
     missing: list[MissingItem] = field(default_factory=list)
+    # Not in the frame, but the log places them on you. A MissingItem here is a
+    # last-seen record rather than a verdict — same shape, opposite conclusion.
+    carried: list[MissingItem] = field(default_factory=list)
     extra: list[str] = field(default_factory=list)
     scene: str = ""
     speech: str = ""
@@ -160,6 +163,7 @@ class LeaveScanResult:
             "expected_items": [_display(i) for i in self.expected],
             "found_items": self.found,
             "missing_items": [m.to_dict() for m in self.missing],
+            "carried_items": [c.to_dict() for c in self.carried],
             "unexpected_items": [_display(i) for i in self.extra],
             "scene": self.scene,
             "speech": self.speech,
@@ -203,6 +207,53 @@ async def _last_seen_hint(store: Store, user_id: str, item: str) -> MissingItem:
     )
 
 
+# Where a thing has to be for "you already have it" to be true.
+#
+# Deliberately about the body, and nothing looser. The camera watches a desk, so
+# an item you have put on is invisible to it — that absence is exactly what the
+# scan used to read as "missing". The log is the only thing that can tell "you
+# picked it up" from "you left it behind", and only when it actually said so.
+# A bag is not on this list: nothing can see inside a closed one, and a wrong
+# all-clear costs more than a reminder you did not need.
+_ON_PERSON = (
+    "in the person's", "in their", "in his", "in her",
+    "in ear", "in the ear", "in an ear", "in hand", "in the hand", "in a hand",
+    "on the wrist", "on their wrist", "around the neck", "on a lanyard", "on the lanyard",
+    "in pocket", "in the pocket", "in a pocket",
+    "wearing", "worn", "on the person",
+)
+
+
+def _is_on_person(detail: str) -> bool:
+    text = (detail or "").lower()
+    return any(phrase in text for phrase in _ON_PERSON)
+
+
+async def _carried_check(
+    store: Store, user_id: str, item: str, now: datetime
+) -> MissingItem | None:
+    """Does the log already show this item on the user? Returns the record if so."""
+    history = await store.find_by_subject(user_id, item, limit=1)
+    if not history:
+        return None
+    last = history[0]
+    detail = str((last.content or {}).get("detail") or "")
+    if not _is_on_person(detail):
+        return None
+    # The same decay the recall workflow trusts. An on-person sighting is
+    # evidence while it is fresh and a memory once it is not: what you wore on
+    # Tuesday says nothing about what you have on now.
+    if _label(score_confidence(last, now)) in {"none", "low"}:
+        return None
+    where = _where(last.location_label, detail)
+    return MissingItem(
+        item=item,
+        last_seen_at=last.observed_at.isoformat(),
+        last_seen_location=last.location_label,
+        hint=f"You have it on you — last seen {_at(where)} {_when_phrase(_fmt_when(last.observed_at))}.",
+    )
+
+
 # Phrases that already carry their own preposition, so "at" must not be prepended.
 _HAS_PREPOSITION = ("in ", "on ", "at ", "under ", "next to ", "by ", "behind ",
                     "inside ", "beside ", "near ")
@@ -240,13 +291,23 @@ def _compose_leave_speech(result: LeaveScanResult, destination: str) -> str:
         expected = _humanize_list([_display(i) for i in result.expected])
         reason = result.note or "I can't see your camera right now."
         return f"{reason} I can't check, but for {dest} you normally take {expected}."
-    if not result.found and not result.missing:
+    if not result.found and not result.missing and not result.carried:
         return f"I didn't recognise anything in that frame. Try pointing the camera at your things."
 
+    # "I can see" is only true of the frame. Something the log places on you is
+    # known, not seen, and the speech must not blur the two.
+    seen_names = [f["name"] for f in result.found]
+    carried_names = [_display(c.item) for c in result.carried]
     missing_names = [_display(m.item) for m in result.missing]
     if not missing_names:
-        got = _humanize_list([f["name"] for f in result.found])
-        return f"You're good to go. I can see your {got}."
+        parts = []
+        if seen_names:
+            parts.append(f"I can see your {_humanize_list(seen_names)}")
+        if carried_names:
+            parts.append(f"you've already got your {_humanize_list(carried_names)}")
+        # Not .capitalize(): it lowercases the rest, and "AirPods" is a name.
+        tail = " and ".join(parts)
+        return f"You're good to go. {tail[0].upper() + tail[1:]}."
 
     lead = f"You're missing your {_humanize_list(missing_names)}."
     if result.times_observed >= 2:
@@ -255,8 +316,8 @@ def _compose_leave_speech(result: LeaveScanResult, destination: str) -> str:
     hints = [m.hint for m in result.missing if m.hint and m.last_seen_at]
     if hints:
         lead += " " + " ".join(hints[:2])
-    if result.found:
-        lead += f" You've got your {_humanize_list([f['name'] for f in result.found])}."
+    if seen_names or carried_names:
+        lead += f" You've got your {_humanize_list(seen_names + carried_names)}."
     return lead
 
 
@@ -305,11 +366,26 @@ async def leave_detection(
         i.key for i in vision.items if not any(i.key in e or e in i.key for e in expected)
     ]
 
+    # Something you are already wearing is not something you forgot. The frame
+    # cannot show it — AirPods in your ear are behind the camera, not on the
+    # desk — so anything the frame misses gets one more question asked of the
+    # log before it is called missing.
+    carried: list[MissingItem] = []
+    not_on_them: list[str] = []
+    for key in missing_keys:
+        record = await _carried_check(store, user_id, key, now)
+        if record is None:
+            not_on_them.append(key)
+        else:
+            carried.append(record)
+    missing_keys = not_on_them
+
     result = LeaveScanResult(
         routine_name=routine.routine_name,
         expected=expected,
         found=[i.to_dict() | {"name": _display(i.key)} for i in vision.items],
         missing=[await _last_seen_hint(store, user_id, k) for k in missing_keys],
+        carried=carried,
         extra=extra_keys,
         scene=vision.scene,
         vision_available=vision.available,
