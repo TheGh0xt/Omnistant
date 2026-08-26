@@ -108,6 +108,31 @@
     return this.canvas.toDataURL('image/jpeg', JPEG_QUALITY);
   };
 
+  /* Is there a camera at all, whether or not it has produced a frame yet? */
+  Camera.prototype.hasStream = function () { return !!this.stream; };
+
+  /* Capture, waiting for a stream that is opening but not yet decodable.
+   *
+   * getUserMedia resolves well before the video element reaches readyState 2,
+   * so for a second or two after the camera starts, `capture()` returns null and
+   * `isRunning()` is false. Anything asking for a frame in that gap silently got
+   * nothing — which is how a leave scan ran blind and queued no reminder while
+   * the camera was, to the user, plainly on. Resolves null only if the wait is
+   * genuinely hopeless. */
+  Camera.prototype.captureWhenReady = function (timeoutMs) {
+    var self = this;
+    var deadline = Date.now() + (timeoutMs || 2500);
+    return new Promise(function (resolve) {
+      (function attempt() {
+        if (!self.stream) { resolve(null); return; }
+        var frame = self.capture();
+        if (frame) { resolve(frame); return; }
+        if (Date.now() >= deadline) { resolve(null); return; }
+        global.setTimeout(attempt, 120);
+      })();
+    });
+  };
+
   /* A coarse greyscale fingerprint of the current frame. */
   Camera.prototype._signature = function () {
     if (!this.isRunning()) { return null; }
