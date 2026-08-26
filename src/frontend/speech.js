@@ -65,13 +65,29 @@
 
     speak: function (text) {
       if (!this.isSupported() || !text) { return; }
-      global.speechSynthesis.cancel();
+      // Cancelling when nothing is speaking is not free on iOS: cancel()
+      // immediately followed by speak() in the same tick can swallow the
+      // utterance outright. Only clear the queue when there is one.
+      if (this.isSpeaking()) { global.speechSynthesis.cancel(); }
       var u = new global.SpeechSynthesisUtterance(text);
       u.rate = 1.02;
       u.pitch = 1.0;
       u.lang = global.navigator.language || 'en-US';
+      var self = this;
+      u.onerror = function (event) {
+        // "not-allowed" here means the unlock never happened. Say so once,
+        // rather than leaving a silent agent that looks like it ignored you.
+        if (event && event.error === 'not-allowed' && !self._warned) {
+          self._warned = true;
+          if (global.console) { global.console.warn('[speech] blocked — needs a user gesture first'); }
+        }
+      };
       global.speechSynthesis.speak(u);
     },
+
+    /* True once synthesis has been unlocked inside a user gesture. iOS refuses
+       to speak before that, and refuses silently. */
+    isUnlocked: function () { return this._unlocked; },
 
     stop: function () {
       if (this.isSupported()) { global.speechSynthesis.cancel(); }
@@ -94,6 +110,8 @@
     this.deadline = null;
     this.permission = null;   // null = unknown, true/false once resolved
     this._announced = false;  // last state handed to onStateChange
+    this.delivered = false;   // has this turn's utterance been handed on?
+    this.lastPartial = '';    // interim text, promoted to final if none arrives
   }
 
   /* Aborting a recogniser also fires its onend, so a single failure can try to
@@ -150,9 +168,18 @@
         if (result.isFinal) { finalText += result[0].transcript; }
         else { partial += result[0].transcript; }
       }
-      if (partial) { self.gotSpeech = true; self.onPartial(partial.trim()); }
+      if (partial) {
+        self.gotSpeech = true;
+        // Remember it. Safari frequently ends a dictation session having only
+        // ever emitted interim results, and a transcript we showed the user but
+        // never acted on is the single most broken-feeling outcome there is.
+        self.lastPartial = partial.trim();
+        self.onPartial(self.lastPartial);
+      }
       if (finalText.trim()) {
         self.gotSpeech = true;
+        self.delivered = true;
+        self.lastPartial = '';
         self.wanted = false;          // a complete utterance ends the turn
         self.onResult(finalText.trim());
       }
@@ -187,6 +214,23 @@
 
     rec.onend = function () {
       self.listening = false;
+
+      // THE FIX. Safari ends dictation without ever setting isFinal, so the
+      // user watched their words appear and then nothing happened — the exact
+      // "it displays but doesn't send" symptom. An interim transcript at the
+      // end of a session IS the utterance; treat it as one.
+      if (!self.delivered && self.lastPartial) {
+        var text = self.lastPartial;
+        self.lastPartial = '';
+        self.delivered = true;
+        self.wanted = false;
+        self._clearTimer('startTimer');
+        self._clearTimer('deadlineTimer');
+        self._setState(false);
+        self.onResult(text);
+        return;
+      }
+
       // Chrome ends on brief silence. If the user still wants to talk and we
       // have not heard anything yet, start it again.
       if (self.wanted && self.restarts < MAX_RESTARTS && Date.now() < self.deadline) {
@@ -253,6 +297,8 @@
     this.wanted = true;
     this.restarts = 0;
     this.gotSpeech = false;
+    this.delivered = false;
+    this.lastPartial = '';
     this.deadline = Date.now() + LISTEN_DEADLINE_MS;
     this._setState(true);
 
