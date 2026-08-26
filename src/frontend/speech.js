@@ -114,6 +114,25 @@
     this.lastPartial = '';    // interim text, promoted to final if none arrives
   }
 
+  /* Hand over whatever this turn captured, once.
+   *
+   * Every path that ends a turn routes through here — the engine's own `onend`,
+   * the hard deadline, and a manual stop. An interim transcript IS the
+   * utterance, and which of those three fires first is a browser detail the
+   * user must never be able to feel. Returns whether anything was delivered. */
+  Listener.prototype._deliver = function () {
+    if (this.delivered || !this.lastPartial) { return false; }
+    var text = this.lastPartial;
+    this.lastPartial = '';
+    this.delivered = true;
+    this.wanted = false;
+    this._clearTimer('startTimer');
+    this._clearTimer('deadlineTimer');
+    this._setState(false);
+    this.onResult(text);
+    return true;
+  };
+
   /* Aborting a recogniser also fires its onend, so a single failure can try to
      report "stopped" twice. Only surface real transitions. */
   Listener.prototype._setState = function (active) {
@@ -215,21 +234,11 @@
     rec.onend = function () {
       self.listening = false;
 
-      // THE FIX. Safari ends dictation without ever setting isFinal, so the
-      // user watched their words appear and then nothing happened — the exact
-      // "it displays but doesn't send" symptom. An interim transcript at the
-      // end of a session IS the utterance; treat it as one.
-      if (!self.delivered && self.lastPartial) {
-        var text = self.lastPartial;
-        self.lastPartial = '';
-        self.delivered = true;
-        self.wanted = false;
-        self._clearTimer('startTimer');
-        self._clearTimer('deadlineTimer');
-        self._setState(false);
-        self.onResult(text);
-        return;
-      }
+      // Safari ends dictation without ever setting isFinal, so the user watched
+      // their words appear and then nothing happened — the exact "it displays
+      // but doesn't send" symptom. An interim transcript at the end of a session
+      // IS the utterance; treat it as one.
+      if (self._deliver()) { return; }
 
       // Chrome ends on brief silence. If the user still wants to talk and we
       // have not heard anything yet, start it again.
@@ -306,14 +315,17 @@
     var self = this;
     this._clearTimer('deadlineTimer');
     this.deadlineTimer = global.setTimeout(function () {
-      if (self.wanted) {
-        self.wanted = false;
-        self.abandon();
-        if (!self.gotSpeech) {
-          self.onError("I stopped listening after 20 seconds without hearing anything.");
-        }
-        self._setState(false);
+      if (!self.wanted) { return; }
+      self.wanted = false;
+      self.abandon();
+      // Deliver before giving up. This deadline exists because some browsers
+      // never fire onend — so it must not depend on onend to hand over what it
+      // already heard, which is how a captured utterance got dropped in silence.
+      if (self._deliver()) { return; }
+      if (!self.gotSpeech) {
+        self.onError("I stopped listening after 20 seconds without hearing anything.");
       }
+      self._setState(false);
     }, LISTEN_DEADLINE_MS);
 
     this._spin();
@@ -338,7 +350,9 @@
     if (this.recognition && this.listening) {
       try { this.recognition.stop(); } catch (err) { /* already stopped */ }
     } else {
+      // No engine to call us back, so nothing else will hand this over.
       this.abandon();
+      if (this._deliver()) { return; }
     }
     this._setState(false);
   };

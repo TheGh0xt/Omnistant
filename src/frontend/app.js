@@ -514,11 +514,16 @@
       ];
     }
     if (result.workflow === 'leave_detection') {
-      return [
+      var rows = [
         { k: 'Routine', v: result.routine },
         { k: 'Missing', v: (result.missing_items || []).map(function (m) { return m.item; }).join(', ') || 'nothing' },
         { k: 'Found', v: (result.found_items || []).map(function (f) { return f.name; }).join(', ') || 'nothing' }
       ];
+      // Carried items are in neither list. Without a row of their own they
+      // simply vanish, which reads as the agent having forgotten them.
+      var carried = (result.carried_items || []).map(function (c) { return c.item; });
+      if (carried.length) { rows.push({ k: 'On you', v: carried.join(', ') }); }
+      return rows;
     }
     if (result.workflow === 'daily_timeline') {
       return [{ k: 'Moments', v: String((result.entries || []).length) }, { k: 'Day', v: result.day }];
