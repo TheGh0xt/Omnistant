@@ -67,3 +67,33 @@ class TestCredentialsReporting:
     def test_the_startup_report_names_the_backend(self):
         # The one line that would have made the 404 obvious on deploy day.
         assert Config().report()["gemini_backend"] in {"vertex-ai", "google-ai-studio"}
+
+
+class TestSessionIdValidation:
+    """A malformed session id used to reach Postgres and 500.
+
+    `session_id` is a uuid column, so `"demo-timing-real"` came back as
+    InvalidTextRepresentation with a stack trace — a server error for what is
+    plainly a bad request, on the endpoints most likely to be poked by hand.
+    """
+
+    def test_a_non_uuid_session_id_is_rejected_as_a_bad_request(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from main import LeaveScanRequest
+
+        with pytest.raises(ValidationError):
+            LeaveScanRequest(destination="work", session_id="demo-timing-real")
+
+    def test_a_real_uuid_passes(self):
+        from main import LeaveScanRequest
+
+        sid = "45165286-cd63-497a-bb66-dc06a56eb967"
+        assert LeaveScanRequest(session_id=sid).session_id == sid
+
+    def test_an_absent_session_id_is_still_allowed(self):
+        from main import LeaveScanRequest
+
+        # The server mints one when the client has no session yet.
+        assert LeaveScanRequest().session_id is None

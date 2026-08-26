@@ -13,6 +13,7 @@ Gemini is used where language genuinely is the task: narrating a day.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import date as Date
 from datetime import datetime, time, timedelta, timezone
@@ -50,8 +51,47 @@ DEFAULT_ROUTINE_ITEMS = ["phone", "wallet", "keys"]
 
 
 def _fmt_time(moment: datetime) -> str:
-    """8:47 AM, in the user's local clock."""
+    """8:47 AM, in the user's local clock. Time only — see `_fmt_when` for days."""
     return moment.astimezone(tz()).strftime("%-I:%M %p")
+
+
+def _fmt_when(moment: datetime) -> str:
+    """"8:47 AM" today, "yesterday at 8:47 AM", "Saturday at ...", "23 Aug at ...".
+
+    A bare clock time is a lie by omission the moment a sighting is not from
+    today. Reading "last seen at 11:09 AM" at 6:28 the next morning says the
+    agent saw the thing five hours ago; it actually saw it the previous day, and
+    the whole value of the answer is knowing which.
+
+    Timeline entries deliberately keep the bare clock (`_fmt_time`): they are
+    already grouped under a heading that names the day, so repeating it on every
+    line is noise.
+    """
+    local = moment.astimezone(tz())
+    clock = local.strftime("%-I:%M %p")
+    days = (datetime.now(tz()).date() - local.date()).days
+    if days <= 0:
+        return clock
+    if days == 1:
+        return f"yesterday, {clock}"
+    if days < 7:
+        return f"{local.strftime('%A')}, {clock}"
+    return f"{local.strftime('%-d %b')}, {clock}"
+
+
+def _when_phrase(when: str) -> str:
+    """Make a `_fmt_when` string read inside a sentence.
+
+    "11:09 AM" needs an "at" in front of it; "yesterday, 11:09 AM" already reads
+    as a time phrase and gets "at yesterday" if you add one. The display form is
+    the one the UI shows in its details table, where a preposition would be
+    wrong — so the two forms differ and this is where they meet.
+    """
+    if re.match(r"^\d{1,2}:\d{2}", when):   # "11:09 AM" — a bare clock time
+        return f"at {when}"
+    if when[:1].isdigit():                   # "14 Aug, 11:09 AM" — a date
+        return f"on {when}"
+    return when                              # "yesterday, ...", "Sunday, ..."
 
 
 def _humanize_list(names: Sequence[str]) -> str:
@@ -159,7 +199,7 @@ async def _last_seen_hint(store: Store, user_id: str, item: str) -> MissingItem:
         item=item,
         last_seen_at=last.observed_at.isoformat(),
         last_seen_location=last.location_label,
-        hint=f"Last seen {_at(where)} at {_fmt_time(last.observed_at)}.",
+        hint=f"Last seen {_at(where)} {_when_phrase(_fmt_when(last.observed_at))}.",
     )
 
 
@@ -391,7 +431,7 @@ class Sighting:
     time_str: str = ""
 
     def __post_init__(self) -> None:
-        self.time_str = _fmt_time(self.at)
+        self.time_str = _fmt_when(self.at)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -470,7 +510,7 @@ def _compose_recall_speech(item: str, sightings: list[Sighting], label: str) -> 
     how = {"visual": "I saw it", "voice": "you told me", "manual": "it was logged",
            "inferred": "I inferred it"}.get(latest.method, "it was recorded")
 
-    line = f"Last confirmed {_at(where)} at {latest.time_str}"
+    line = f"Last confirmed {_at(where)} {_when_phrase(latest.time_str)}"
     if label == "high":
         line += f" — {how}, so it should still be there."
     elif label == "medium":
@@ -480,7 +520,7 @@ def _compose_recall_speech(item: str, sightings: list[Sighting], label: str) -> 
 
     if len(sightings) > 1:
         prior = sightings[1]
-        line += f" Before that, {_at(_where(prior.location, prior.detail))} at {prior.time_str}."
+        line += f" Before that, {_at(_where(prior.location, prior.detail))} {_when_phrase(prior.time_str)}."
     return f"Your {name}: {line}"
 
 

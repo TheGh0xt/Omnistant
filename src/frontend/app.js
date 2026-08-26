@@ -359,6 +359,19 @@
     els.tlDetail.appendChild(title); els.tlDetail.appendChild(meta);
   }
 
+  /* One-shot: any first interaction unlocks speech synthesis. A missed unlock
+     is silent, unrecoverable for the session, and indistinguishable from an
+     agent that decided not to answer — so catch it on whatever the user
+     happens to touch first. */
+  ['pointerdown', 'touchend', 'keydown'].forEach(function (evt) {
+    document.addEventListener(evt, function once() {
+      Speaker.unlock();
+      ['pointerdown', 'touchend', 'keydown'].forEach(function (e2) {
+        document.removeEventListener(e2, once);
+      });
+    }, { once: false, passive: true });
+  });
+
   /* ───────── wake word ───────── */
   var wake = new WakeWord({
     // Show what the recogniser actually heard while in standby. Without this,
@@ -366,11 +379,15 @@
     // isn't working, and there is no way to tell whether you said it wrong.
     onHeard: function (text) {
       if (state.busy || !state.wake) { return; }
-      els.voiceTranscript.textContent = '“' + text + '”';
+      // Labelled, because an unlabelled transcript here reads as dictation and
+      // is not: the standby stream is listening for a trigger and nothing said
+      // to it is ever sent. Watching your own words appear and go nowhere is
+      // how "the wake word is broken" gets reported when it is working.
+      els.voiceTranscript.textContent = 'heard while waiting: “' + text + '”';
       clearTimeout(state.heardTimer);
       state.heardTimer = setTimeout(function () {
         if (state.wake && !state.busy) {
-          els.voiceTranscript.textContent = 'Say “Hey Omni”, or tap to talk.';
+          els.voiceTranscript.textContent = 'Say “Hey Omni” to talk to me.';
         }
       }, 2500);
     },
@@ -408,6 +425,10 @@
   }
 
   els.wakePill.addEventListener('click', function () {
+    // Turning the wake word on means everything after it is hands-free, so this
+    // is the last user gesture we are guaranteed to get. Unlock here or the
+    // agent answers every wake-word command in silence.
+    Speaker.unlock();
     if (!wake.isSupported()) { say('This browser can’t listen for a wake word. Tap the mic instead.'); return; }
     if (!state.wake) {
       // Said plainly, once, before it is switched on: this is not local.
@@ -599,7 +620,20 @@
       return;
     }
     state.listener = listener;
-    els.micBtn.addEventListener('click', function () { wake.suspend(); listener.toggle(); });
+    els.micBtn.addEventListener('click', function () {
+      // Unlock BEFORE starting the mic. iOS will not speak until synthesis has
+      // been touched inside a user gesture, and for someone who only ever talks
+      // to it — never typing, never tapping a suggestion — this tap is the only
+      // gesture there is. Without it every reply came back silently, which is
+      // the whole multimodal promise quietly not happening.
+      //
+      // Safe in this order despite the synthesis/recognition conflict: unlock
+      // speaks a zero-volume utterance and cancels it, and Listener.start calls
+      // Speaker.stop() before touching the recogniser.
+      Speaker.unlock();
+      wake.suspend();
+      listener.toggle();
+    });
   }
 
   boot();

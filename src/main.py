@@ -15,13 +15,13 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from agent.engine import get_engine, init_engine
 from agent.watch import observe_tick
@@ -76,22 +76,43 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
+def _valid_session_id(value: str | None) -> str | None:
+    """Reject a malformed session id here rather than at the database.
+
+    `session_id` is a uuid column, so a non-uuid string travelled all the way to
+    Postgres and came back as InvalidTextRepresentation — a 500 and a stack
+    trace for what is plainly a bad request. The browser always sends a real
+    uuid, so this only ever fires for someone driving the API by hand, which is
+    exactly who deserves a usable error.
+    """
+    if value is None:
+        return None
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError("session_id must be a UUID")
+    return value
+
+
+SessionId = Annotated[str | None, AfterValidator(_valid_session_id)]
+
+
 class ChatRequest(BaseModel):
     text: str = Field(description="What the user said or typed.")
-    session_id: str | None = None
+    session_id: SessionId = None
     user_id: str | None = None
     frame: str | None = Field(default=None, description="Optional camera still as a data URL.")
 
 
 class FrameRequest(BaseModel):
-    session_id: str
+    session_id: SessionId
     image: str = Field(description="Camera still as a `data:image/jpeg;base64,...` URL.")
 
 
 class ObserveRequest(BaseModel):
     """One tick of the watch loop."""
 
-    session_id: str
+    session_id: SessionId
     frame: str = Field(description="Camera still as a `data:image/jpeg;base64,...` URL.")
     user_id: str | None = None
     location: str | None = None
@@ -100,7 +121,7 @@ class ObserveRequest(BaseModel):
 
 class LeaveScanRequest(BaseModel):
     destination: str = "work"
-    session_id: str | None = None
+    session_id: SessionId = None
     user_id: str | None = None
     frame: str | None = None
     origin: str | None = None
