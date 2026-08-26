@@ -215,18 +215,28 @@ async def _last_seen_hint(store: Store, user_id: str, item: str) -> MissingItem:
 # picked it up" from "you left it behind", and only when it actually said so.
 # A bag is not on this list: nothing can see inside a closed one, and a wrong
 # all-clear costs more than a reminder you did not need.
-_ON_PERSON = (
-    "in the person's", "in their", "in his", "in her",
-    "in ear", "in the ear", "in an ear", "in hand", "in the hand", "in a hand",
-    "on the wrist", "on their wrist", "around the neck", "on a lanyard", "on the lanyard",
-    "in pocket", "in the pocket", "in a pocket",
-    "wearing", "worn", "on the person",
+# Matched as "preposition + body part" rather than a list of literal phrases,
+# because the same fact reaches the log in two different voices: vision writes
+# "in the person's right ear", and record_observation stores what you said as
+# "in right ear". A fixed phrase list covered the first and silently missed the
+# second, so telling the agent where a thing was did nothing for the very scan
+# that was about to call it missing.
+#
+# The possessive and side words are enumerated rather than left open, which
+# keeps "on the table near her hand" from reading as "in hand". Erring toward a
+# reminder you did not need is the whole point.
+_BODY_PART = r"ear|ears|wrist|wrists|neck|pocket|pockets|hand|hands|lanyard"
+_ON_PERSON_RE = re.compile(
+    r"\b(?:wearing|worn|on the person)\b"
+    r"|\b(?:in|on|around)\s+"
+    r"(?:(?:the\s+)?person's\s+|the\s+|a\s+|an\s+|my\s+|your\s+|his\s+|her\s+|their\s+|its\s+)?"
+    r"(?:left\s+|right\s+|other\s+)?"
+    rf"(?:{_BODY_PART})\b"
 )
 
 
 def _is_on_person(detail: str) -> bool:
-    text = (detail or "").lower()
-    return any(phrase in text for phrase in _ON_PERSON)
+    return bool(_ON_PERSON_RE.search((detail or "").lower()))
 
 
 async def _carried_check(

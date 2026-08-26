@@ -217,3 +217,43 @@ async def test_the_reminder_does_not_name_what_you_are_wearing(
     queued = await store.due_nudges(datetime.now(timezone.utc) + timedelta(hours=1))
     assert len(queued) == 1
     assert "airpods" not in queued[0]["payload"]["missing"]
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "in the person's right ear",   # how vision describes it
+        "in right ear",                # how record_observation stores what you said
+        "in my right ear",
+        "in ear",
+        "in his jacket",               # not a body part, but see the negative cases
+        "on the wrist",
+        "around my neck",
+        "in a pocket",
+        "wearing them",
+    ],
+)
+def test_on_person_phrasings_agree_across_both_voices(detail):
+    from agent.workflows import _is_on_person
+
+    # "in his jacket" is the one entry here that must NOT count -- kept in the
+    # same list so the boundary stays visible next to what does.
+    expected = detail != "in his jacket"
+    assert _is_on_person(detail) is expected, detail
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "on the right side of the desk",
+        "at the bottom left corner of the desk",
+        "on the table near her hand",   # a hand is mentioned; the item is not in it
+        "in the bag on the desk",
+        "on the kitchen counter",
+        "",
+    ],
+)
+def test_a_thing_put_down_is_never_read_as_a_thing_worn(detail):
+    from agent.workflows import _is_on_person
+
+    assert _is_on_person(detail) is False, detail
