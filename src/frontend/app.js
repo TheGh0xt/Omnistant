@@ -18,6 +18,7 @@
   var MIN_API_GAP_MS = 6000;   // floor between vision calls, even if things move
   var DIFF_THRESHOLD = 6;      // mean luma delta that counts as "something changed"
   var REVEAL_MS = 150;         // word-by-word reveal cadence
+  var FRAME_WARM_MS = 60000;   // refresh the server's cached frame at most this often
 
   var el = function (id) { return document.getElementById(id); };
   var els = {
@@ -44,7 +45,7 @@
   var state = {
     sessionId: null, userId: null,
     screen: 'home', busy: false,
-    watching: false, lastApiAt: 0, tickTimer: null, pausedUntil: 0,
+    watching: false, lastApiAt: 0, lastFrameWarmAt: 0, tickTimer: null, pausedUntil: 0,
     observations: [], filter: 'all',
     revealTimer: null, detailRows: [],
     timeline: [], timelineTotal: 0, tlSelected: 0, wake: false, heardTimer: null
@@ -213,6 +214,28 @@
     setAgentStatus('Ready');
   }
 
+  /* Keep the server's cached frame fresh while the scene sits still.
+   *
+   * The watch loop only spends a vision call when something moves, which is the
+   * whole reason it is affordable — but it means a motionless desk stops
+   * refreshing the cached frame, and the cache expires after FRAME_TTL_SECONDS.
+   * A leave scan arriving after that has nothing to look at. `/api/frame` only
+   * stores the image; no model is involved, so this stays free. */
+  async function keepFrameWarm(now) {
+    if (now - state.lastFrameWarmAt < FRAME_WARM_MS) { return; }
+    var frame = camera.capture();
+    if (!frame) { return; }
+    state.lastFrameWarmAt = now;
+    try {
+      await api('/api/frame', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: state.sessionId, image: frame })
+      });
+    } catch (err) {
+      /* The cache is an optimisation. Never let it break the watch loop. */
+    }
+  }
+
   async function tick() {
     if (!state.watching || state.busy) { return; }
     var now = Date.now();
@@ -222,12 +245,16 @@
       return;
     }
     if (now - state.lastApiAt < MIN_API_GAP_MS) { return; }
-    if (!camera.hasChanged(DIFF_THRESHOLD)) { return; }   // nothing moved; costs nothing
+    if (!camera.hasChanged(DIFF_THRESHOLD)) {   // nothing moved; costs no vision call
+      keepFrameWarm(now);
+      return;
+    }
 
     var frame = camera.capture();
     if (!frame) { return; }
     camera.commitFrame();
     state.lastApiAt = now;
+    state.lastFrameWarmAt = now;   // an observe caches the frame too
 
     try {
       var result = await api('/api/observe', {
@@ -477,8 +504,14 @@
     setVoice('busy', 'Thinking…', '“' + text + '”');
 
     var payload = { text: text, session_id: state.sessionId, user_id: state.userId };
-    // If the camera is already open, the current view is part of the question.
-    if (camera.isRunning()) { payload.frame = camera.capture(); }
+    // If the camera is open, the current view is part of the question.
+    //
+    // Waited for rather than sampled: `isRunning()` is false for the second or
+    // two between the camera starting and the video becoming decodable, and
+    // "I'm heading out" lands inside that gap constantly — you tap start and
+    // speak. A scan with no frame cannot see, so it queues no reminder, and the
+    // notification simply never arrives.
+    if (camera.hasStream()) { payload.frame = await camera.captureWhenReady(2500); }
 
     try {
       var reply = await api('/api/chat', { method: 'POST', body: JSON.stringify(payload) });
