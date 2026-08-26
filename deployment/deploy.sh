@@ -46,6 +46,25 @@ GEMINI_MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
 USE_VERTEX="${USE_VERTEX:-1}"
 VERTEX_LOCATION="${VERTEX_LOCATION:-global}"
 
+# --- Cadence ---------------------------------------------------------------
+# Production values. DEMO_MODE=1 shortens the whole loop so the agent acting on
+# its own fits inside a single unedited take — same trigger, same code, same
+# delivery, ~45s instead of up to 7 minutes.
+#
+# These live here rather than being applied afterwards for the same reason the
+# Vertex vars do: --set-env-vars REPLACES the environment, so anything set by
+# hand on a revision is silently dropped by the next deploy. A demo cadence that
+# quietly reverts an hour before recording is worse than never having set it.
+if [[ "${DEMO_MODE:-0}" == "1" ]]; then
+  NUDGE_DELAY="${NUDGE_DELAY:-0.5}"
+  DRAIN_CRON="${DRAIN_CRON:-* * * * *}"      # Cloud Scheduler's floor
+  RECAP_NARRATE="${RECAP_NARRATE:-false}"
+else
+  NUDGE_DELAY="${NUDGE_DELAY:-2}"
+  DRAIN_CRON="${DRAIN_CRON:-*/5 * * * *}"
+  RECAP_NARRATE="${RECAP_NARRATE:-true}"
+fi
+
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "ERROR: no project set. Run: gcloud config set project YOUR_PROJECT_ID" >&2
   exit 1
@@ -217,6 +236,8 @@ SECRETS+=",DATABASE_URL=omnistant-database-url:latest"
 [[ -n "${GEMINI_API_KEY:-}" ]] && SECRETS+=",GEMINI_API_KEY=gemini-api-key:latest"
 
 ENV_VARS="GEMINI_MODEL=${GEMINI_MODEL},TIMEZONE=${TIMEZONE},LOG_LEVEL=INFO"
+ENV_VARS+=",LEAVE_NUDGE_DELAY_MINUTES=${NUDGE_DELAY}"
+ENV_VARS+=",RECAP_NARRATE=${RECAP_NARRATE}"
 
 # --set-env-vars REPLACES the whole set rather than merging into it, so anything
 # configured by hand on a previous revision is silently dropped by the next
@@ -283,7 +304,8 @@ SERVICE_URL=$(gcloud run services describe "${SERVICE}" --region="${REGION}" --f
 # --- 6. Cloud Scheduler ----------------------------------------------------
 # This is what makes it an agent rather than a chatbot: it acts with nobody
 # there to ask it to.
-say "Scheduling the autonomous jobs"
+say "Scheduling the autonomous jobs (${DRAIN_CRON} drain, ${NUDGE_DELAY}min nudge delay)"
+[[ "${DEMO_MODE:-0}" == "1" ]] && warn "DEMO_MODE=1 — this cadence is for recording, not production"
 schedule_job() {
   local name="$1" cron="$2" path="$3"
   local args=(
@@ -311,7 +333,7 @@ schedule_job() {
 # for a recording. Cloud Scheduler's floor is one minute, so a 45-60s take
 # pairs "* * * * *" here with LEAVE_NUDGE_DELAY_MINUTES=0.5 on the service.
 # The defaults below are the production ones and must stay that way.
-schedule_job omnistant-drain-nudges  "${DRAIN_CRON:-*/5 * * * *}"   "/api/tasks/drain-nudges"
+schedule_job omnistant-drain-nudges  "${DRAIN_CRON}"   "/api/tasks/drain-nudges"
 # Ticks through the morning; the endpoint decides whether it is actually within
 # the window before this routine's *learned* departure time, and claims a
 # once-per-day mark so repeated ticks cannot notify twice.
