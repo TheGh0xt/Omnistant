@@ -20,3 +20,10 @@ demo_data/*.local.json
 *.log
 .DS_Store
 .seeded
+
+# --- Local-only working notes: useful here, not for the public repo ---
+ONE_SHOT_PROMPT.md
+ENGINEERING_LOG.md
+design_handoff_omnistant_mobile/
+CLAUDE.md
+.playwright-mcp/
