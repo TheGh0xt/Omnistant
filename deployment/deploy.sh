@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Deploy the Personal Context Agent to Cloud Run.
+# Deploy Omnistant to Cloud Run.
 #
 # Idempotent: safe to re-run. Each step checks whether the resource already
 # exists before creating it, so a partial failure can be resumed by running the

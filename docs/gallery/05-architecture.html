@@ -1,0 +1,259 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#F8F9FB; --surface:#FFFFFF; --primary:#4A90E2; --primary-text:#357ABD;
+    --item:#34A853; --activity:#BD10E0; --text:#2C3E50; --muted:#7F8C8D;
+    --border:#E8EAED; --warning:#FBBC04; --danger:#EA4335;
+    --sh-card:0 2px 10px rgba(44,62,80,.06);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:1800px; height:1200px; overflow:hidden; }
+  body {
+    font-family: Montserrat, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    background:var(--bg); color:var(--text);
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .page { width:1800px; height:1200px; padding:56px 64px; position:relative; }
+
+  .eyebrow { font-size:20px; font-weight:700; letter-spacing:.14em; color:var(--primary-text);
+             text-transform:uppercase; margin-bottom:14px; }
+  h1 { font-size:40px; line-height:1.15; font-weight:700; letter-spacing:-.02em; max-width:1500px; }
+
+  .frame { margin-top:30px; background:var(--surface); border:1px solid var(--border);
+           border-radius:16px; box-shadow:var(--sh-card); padding:46px 60px 40px;
+           position:relative; height:918px; }
+
+  .diagram { position:relative; height:100%; display:flex; flex-direction:column;
+             justify-content:space-between; }
+
+  .row { display:flex; align-items:flex-start; justify-content:center; gap:40px; position:relative; z-index:2; }
+  .row.spread { justify-content:space-between; }
+
+  .node { border-radius:10px; padding:13px 19px; color:#fff; box-shadow:0 3px 8px rgba(44,62,80,.10); }
+  .node .t { font-size:15.5px; font-weight:700; display:flex; align-items:center; gap:7px; white-space:nowrap; }
+  .node .s { font-size:11.5px; font-weight:500; opacity:.88; margin-top:4px; line-height:1.4; }
+
+  .c-amber  { background:var(--warning); color:#3A2E00; }
+  .c-amber .s { opacity:.75; }
+  .c-green  { background:var(--item); }
+  .c-red    { background:var(--danger); }
+  .c-blue   { background:var(--primary); }
+  .c-purple { background:var(--activity); }
+  .c-navy   { background:#1F2B3A; }
+  .c-light  { background:var(--surface); color:var(--text); border:1px solid var(--border); }
+  .c-light .s { color:var(--muted); }
+  .c-sql    { background:#2C5A8C; }
+
+  .wf-frame { border:1.5px dashed #C6CCD3; border-radius:12px; padding:22px 24px 18px; }
+  .wf-label { font-size:11px; font-weight:700; letter-spacing:.08em; color:var(--muted);
+              text-transform:uppercase; margin-bottom:14px; text-align:center; }
+  .wf-frame .row { gap:24px; }
+
+  svg.wires { position:absolute; inset:0; width:100%; height:100%; z-index:1; overflow:visible; }
+  .wire { fill:none; stroke:#B9C2CC; stroke-width:1.6; }
+  .wire.dotted { stroke-dasharray:3 4; stroke:#C9B8DE; }
+  .lbl { font-size:12px; fill:#5B6B7C; font-weight:500; }
+  .lbl-bg { fill:#F8F9FB; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="eyebrow">Architecture</div>
+  <h1>Three ways in — you ask, it watches, or nobody is there.</h1>
+
+  <div class="frame">
+    <div class="diagram" id="diagram">
+      <svg class="wires" id="wires"></svg>
+
+      <div class="row" style="margin-bottom:22px;">
+        <div class="node c-amber" id="you-ask">
+          <div class="t">📱 You ask</div>
+          <div class="s">voice · text · wake word</div>
+        </div>
+        <div class="node c-green" id="it-watches">
+          <div class="t">👁 It watches</div>
+          <div class="s">camera, continuously</div>
+        </div>
+        <div class="node c-red" id="nobody">
+          <div class="t">⏰ Nobody is there</div>
+          <div class="s">Cloud Scheduler</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="node c-blue" id="gateway">
+          <div class="t">Cloud Run · FastAPI</div>
+        </div>
+      </div>
+
+      <div class="row spread" style="padding:0 40px;">
+        <div class="node c-blue" id="agent">
+          <div class="t">🤖 Google ADK Agent</div>
+          <div class="s">rules-first intent, then<br>Gemini picks from 8 tools</div>
+        </div>
+        <div class="node c-green" id="watchloop">
+          <div class="t">⏱ Watch loop</div>
+          <div class="s">appeared · left view<br><b>no agent in the path</b></div>
+        </div>
+      </div>
+
+      <div class="row" style="width:100%;">
+        <div class="wf-frame" id="workflows" style="width:800px;">
+          <div class="wf-label">Workflows — deterministic, not model-improvised</div>
+          <div class="row">
+            <div class="node c-green" id="wf-leave"><div class="t">Leave Detection</div></div>
+            <div class="node c-green" id="wf-recall"><div class="t">Item Recall</div></div>
+            <div class="node c-green" id="wf-timeline"><div class="t">Daily Timeline</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row spread" style="padding:0 10px;">
+        <div class="node c-sql" id="cloudsql" style="width:360px;">
+          <div class="t">🗄 Cloud SQL · PostgreSQL — the memory</div>
+          <div class="s">observations · routines · leave_scans<br>pending_nudges · agent_marks · ADK sessions</div>
+        </div>
+        <div class="node c-purple" id="gemini" style="width:230px;">
+          <div class="t">✨ Gemini 3.5 Flash</div>
+          <div class="s">the seeing and the wording —<br><b>never the deciding</b></div>
+        </div>
+        <div class="node c-light" id="spoken" style="width:210px;">
+          <div class="t">💬 Spoken + on screen</div>
+          <div class="s">memory globe · day timeline</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="node c-red" id="scheduled">
+          <div class="t">⏰ Scheduled work</div>
+          <div class="s">pre-departure brief · drain reminders</div>
+        </div>
+        <div class="node c-red" id="recap">
+          <div class="t">🌙 Evening recap · 9pm</div>
+          <div class="s">reconstructs the day, unprompted</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="node c-navy" id="slack" style="width:560px;">
+          <div class="t">💬 Slack</div>
+          <div class="s">"You left without your AirPods. Last seen: kitchen counter, 8:31."<br>"Your day: home 6h · desk 3h · gym 1h — AirPods last seen kitchen counter."</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+function rectOf(id) { return document.getElementById(id).getBoundingClientRect(); }
+
+function connect(fromId, toId, label, opts) {
+  opts = opts || {};
+  var svg = document.getElementById('wires');
+  var wrap = document.getElementById('diagram').getBoundingClientRect();
+  var a = rectOf(fromId), b = rectOf(toId);
+
+  var fromSide = opts.fromSide || 'bottom';
+  var toSide = opts.toSide || 'top';
+
+  var sx, sy, ex, ey, d, lx, ly;
+
+  if (fromSide === 'left' || fromSide === 'right') {
+    sx = (fromSide === 'left' ? a.left : a.right) - wrap.left;
+    sy = a.top + a.height/2 - wrap.top;
+  } else {
+    sx = a.left + a.width/2 - wrap.left;
+    sy = (fromSide === 'top' ? a.top : a.bottom) - wrap.top;
+  }
+  if (toSide === 'left' || toSide === 'right') {
+    ex = (toSide === 'left' ? b.left : b.right) - wrap.left;
+    ey = b.top + b.height/2 - wrap.top;
+  } else {
+    ex = b.left + b.width/2 - wrap.left;
+    ey = (toSide === 'top' ? b.top : b.bottom) - wrap.top;
+  }
+
+  var midy = opts.midY !== undefined ? opts.midY : sy + (ey - sy) * (opts.bend !== undefined ? opts.bend : 0.55);
+  d = "M " + sx + " " + sy + " L " + sx + " " + midy + " L " + ex + " " + midy + " L " + ex + " " + ey;
+  lx = opts.labelX !== undefined ? opts.labelX : (sx + ex) / 2;
+  ly = midy - 8;
+
+  var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  path.setAttribute("class", "wire" + (opts.dotted ? " dotted" : ""));
+  path.setAttribute("marker-end", "url(#arrow" + (opts.dotted ? "-dotted" : "") + ")");
+  svg.appendChild(path);
+
+  if (label) {
+    var lines = label.split('\n');
+    var maxLen = Math.max.apply(null, lines.map(function(l){return l.length;}));
+    var w = maxLen * 6.3 + 12;
+    var h = lines.length * 15 + 6;
+    var rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", lx - w/2);
+    rect.setAttribute("y", ly - h + 4);
+    rect.setAttribute("width", w);
+    rect.setAttribute("height", h);
+    rect.setAttribute("class", "lbl-bg");
+    svg.appendChild(rect);
+
+    var text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    text.setAttribute("x", lx);
+    text.setAttribute("class", "lbl");
+    text.setAttribute("text-anchor", "middle");
+    lines.forEach(function(line, i){
+      var tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+      tspan.setAttribute('x', lx);
+      tspan.setAttribute('y', ly - (lines.length - 1 - i) * 15);
+      tspan.textContent = line;
+      text.appendChild(tspan);
+    });
+    svg.appendChild(text);
+  }
+}
+
+var svg = document.getElementById('wires');
+var defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+defs.innerHTML =
+  '<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+  '<path d="M0,0 L10,5 L0,10 z" fill="#B9C2CC"/></marker>' +
+  '<marker id="arrow-dotted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+  '<path d="M0,0 L10,5 L0,10 z" fill="#C9B8DE"/></marker>';
+svg.appendChild(defs);
+
+var wrapTop = rectOf('diagram').top;
+var wfBottom = rectOf('workflows').bottom - wrapTop;
+var row5Top = rectOf('cloudsql').top - wrapTop;
+
+connect('you-ask', 'gateway', null, {bend:.5});
+connect('it-watches', 'gateway', 'only frames that changed', {bend:.45});
+connect('nobody', 'gateway', 'POST + X-Task-Token', {bend:.75});
+
+connect('gateway', 'agent', null, {bend:.5});
+connect('gateway', 'watchloop', null, {bend:.35});
+
+connect('agent', 'workflows', '8 tools', {bend:.55});
+connect('workflows', 'cloudsql', 'read & append · missing ⇒ queue a reminder', {bend:.6});
+connect('workflows', 'gemini', 'see · narrate,\nnever invent', {dotted:true, bend:.5});
+
+connect('watchloop', 'cloudsql', 'writes what it saw — no agent in the path',
+        {toSide:'top', midY: wfBottom + 22});
+
+connect('gemini', 'spoken', 'the wording', {bend:.5});
+
+connect('cloudsql', 'scheduled', 'due — and\nstill missing?', {bend:.55});
+connect('cloudsql', 'recap', 'reconstructs\nthe day', {bend:.4});
+
+connect('scheduled', 'slack', null, {bend:.6});
+connect('recap', 'slack', null, {bend:.6});
+</script>
+</body>
+</html>

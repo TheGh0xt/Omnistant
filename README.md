@@ -1,4 +1,4 @@
-# Personal Context Agent
+# Omnistant
 
 An autonomous agent that watches your context and acts on it without being asked.
 
@@ -207,7 +207,7 @@ uv run pytest -q
 node --test tests/js/*.test.js
 ```
 
-**Expect:** `151 passed` in well under a second, then `pass 7` from the frontend
+**Expect:** `198 passed` in well under a second, then `pass 27` from the frontend
 suite. The JS tests need no dependencies — `node --test` is built into Node, and
 there is deliberately no `package.json` in this repo.
 
@@ -481,8 +481,8 @@ src/
 ## Tests
 
 ```bash
-uv run pytest -q          # 151 tests, ~0.6s
-node --test tests/js/*.test.js   # 7 wake-word regressions, no deps
+uv run pytest -q          # 198 tests, ~0.8s
+node --test tests/js/*.test.js   # 27 frontend regressions, no deps
 ```
 
 The suite is hermetic: no Postgres, no Redis, no API key, no network. Credentials

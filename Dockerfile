@@ -1,4 +1,4 @@
-# Personal Context Agent — Cloud Run image.
+# Omnistant — Cloud Run image.
 #
 # Multi-stage so the runtime layer carries no build toolchain. The final image
 # runs as a non-root user, which Cloud Run does not require but costs nothing.

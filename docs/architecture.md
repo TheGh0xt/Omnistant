@@ -177,10 +177,16 @@ bottle to the gym three times and it starts noticing when you don't.
 
 ## Autonomy
 
-Two Cloud Scheduler jobs, both hitting endpoints with no user in the loop:
+Three Cloud Scheduler jobs, all hitting endpoints with no user in the loop:
 
-- **`/api/tasks/morning-brief`** — weekdays 08:00. Walks the work routine, runs
-  a recall on each item, and reports anything it cannot currently vouch for.
+- **`/api/tasks/morning-brief`** — ticks every 15 minutes and fires only inside a
+  window around the departure time it has *learned* for the work routine, at most
+  once a day. Walks that routine, runs a recall on each item, and reports anything
+  it cannot currently vouch for. A brief pinned to 08:00 lands 45 minutes early
+  for someone who leaves at 08:45 and after the fact on a day they leave at 07:30.
+- **`/api/tasks/drain-nudges`** — every 5 minutes. Delivers reminders that have
+  come due, re-checking each one first so a reminder about something since seen is
+  cancelled rather than sent.
 - **`/api/tasks/evening-recap`** — daily 21:00. Reconstructs the day.
 
 These share the same workflows and write to the same log as the conversational

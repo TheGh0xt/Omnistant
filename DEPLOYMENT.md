@@ -31,8 +31,10 @@ for almost no benefit at demo scale. It is now **opt-in**.
 Two reasons it earns so little:
 
 - The browser sends the camera frame **with** the chat turn, so frames never
-  need to round-trip through a shared cache. (`/api/frame` exists, but the UI
-  does not use it.)
+  need to round-trip through a shared cache. The watch loop additionally warms
+  `/api/frame` so a leave scan spoken with no frame attached still has something
+  recent to look at; that cache is an optimisation, and the scan degrades to
+  "cannot see right now" without it rather than failing.
 - ADK's session service is in-process regardless, so conversation history does
   not survive an instance change whether Redis exists or not. That is also why
   `--max-instances` now defaults to **1**: a second turn routed to a different
@@ -91,7 +93,8 @@ tier's direct connection limit is low.
 | Cloud SQL (PG 16) | `omnistant-pg`, `db-f1-micro`, **ENTERPRISE edition** | the observation log |
 | Secrets | `gemini-api-key`, `omnistant-task-token`, `omnistant-database-url`, `omnistant-db-password` | credentials |
 | Secret | `omnistant-slack-webhook` — only if `SLACK_WEBHOOK_URL` is set | where the jobs deliver |
-| Scheduler job | `omnistant-morning-brief`, weekdays 08:00 | unprompted pre-departure check |
+| Scheduler job | `omnistant-drain-nudges`, every 5 min | delivers reminders that have come due |
+| Scheduler job | `omnistant-morning-brief`, every 15 min | ticks; fires only near your *learned* departure time |
 | Scheduler job | `omnistant-evening-recap`, daily 21:00 | unprompted day recap |
 | Memorystore Redis | `omnistant-cache`, 1GB — **only with `USE_MEMORYSTORE=1`** | session state, camera frames |
 | VPC connector | `omnistant-vpc` — only with `USE_MEMORYSTORE=1` | Cloud Run → Memorystore private IP |
@@ -206,7 +209,9 @@ been revoked, the job logs the failure, returns `"delivered": false`, and still
 completes with its result intact — a missed notification must never take down
 the run that produced it.
 
-Test it without waiting for 08:00:
+The brief is not pinned to an hour: it ticks every 15 minutes and sends only
+inside a window around the departure time it has learned for your work routine,
+at most once a day. To test it outside that window, add `?force=true`:
 
 ```bash
 TOKEN=$(gcloud secrets versions access latest --secret=omnistant-task-token)

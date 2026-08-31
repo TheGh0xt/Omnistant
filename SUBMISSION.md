@@ -29,6 +29,19 @@ seeing the bag, but by seeing the AirPods stop being on the desk.
 camera can actually see against what you normally carry to that destination.
 Anything missing comes back with where it was last seen.
 
+**It adapts.** Nobody configures a packing list. A destination it has never
+heard of starts from a sensible default; after that it learns from you. Any item
+you actually carried on 60% of your recent trips to a place is promoted into
+that routine on its own — the check for work grows to include your badge because
+you keep taking your badge, not because someone typed it in. It learns *when*
+that trip happens too, from the times you actually left, which is what decides
+when the pre-departure brief is worth sending.
+
+Say *"I'm going to work right now from home"* and it reads the whole list back —
+badge included — then keeps watching rather than answering once. What the camera
+can see is ticked off as it sees it; what it still can't account for is exactly
+what follows you out the door.
+
 **It follows you out.** Two minutes after you leave, if something is still
 missing, it posts to Slack — with the location, so you can decide in one glance
 whether it's worth turning back:
