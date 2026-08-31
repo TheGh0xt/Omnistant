@@ -20,15 +20,16 @@ Status of the three build-spec workflows: all shipped and live. This is what is
       transcript. A webhook URL *is* the credential — anyone holding it can post
       to the channel.
 - [x] **Merge the open PR** so `main` is what a judge clones.
-- [ ] **Redeploy at the production cadence.** The recording ran with
-      `DEMO_MODE=1` (30-second nudge delay, per-minute drain). `--set-env-vars`
-      replaces the environment, so a plain `./deployment/deploy.sh` restores it —
-      but only a deploy does, and until one runs the deployed service is not the
-      product the README describes.
-- [ ] **Re-seed the learned routines after the demo.** Evening leave-scans during
-      recording dragged the learned `work` departure to 19:44. That is real
-      learning behaving correctly on unrepresentative input, and it leaves the
-      brief describing a day nobody has.
+- [x] **Redeploy at the production cadence.** Done: the live service runs a
+      2-minute nudge delay, drains every 5 minutes, and narrates the recap
+      again. A reminder is therefore *due* 2 minutes after you leave and
+      *delivered* within 5 more, so budget 2-7 minutes end to end when testing.
+- [x] **Re-seed the learned routines after the demo.** Evening leave-scans during
+      recording had dragged the learned `work` departure to 19:44 — real learning
+      behaving correctly on unrepresentative input, but it left the brief
+      describing a day nobody has. Reset to 08:45, which the endpoint now reports
+      as a window of 08:20-09:00. It will drift again if the next leave-scans are
+      unrepresentative; that is the feature working, not a regression.
 
 ---
 
