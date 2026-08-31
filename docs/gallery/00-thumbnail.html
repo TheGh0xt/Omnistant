@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#F8F9FB; --surface:#FFFFFF; --primary:#4A90E2; --primary-text:#357ABD;
+    --item:#34A853; --activity:#BD10E0; --text:#2C3E50; --muted:#7F8C8D;
+    --border:#E8EAED; --warning:#FBBC04;
+    --sh-card:0 2px 10px rgba(44,62,80,.06);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:1280px; height:720px; overflow:hidden; }
+  body {
+    font-family: Montserrat, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    background:var(--bg); color:var(--text);
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .stage { height:100%; display:grid; grid-template-columns: 430px 1fr; gap:56px;
+           padding:56px 64px 56px 60px; align-items:center; position:relative; }
+
+  /* brand, top-right — same placement as the gallery plates */
+  .brand { position:absolute; top:42px; right:64px; display:flex; align-items:center; gap:10px; }
+  .brand .dot { width:11px; height:11px; border-radius:50%; background:var(--item); }
+  .brand span { font-size:20px; font-weight:700; color:var(--text); }
+
+  /* ── phone ── */
+  .phone { width:430px; border-radius:26px; background:var(--surface);
+           box-shadow:0 18px 50px rgba(44,62,80,.13); padding:16px 16px 0;
+           overflow:hidden; padding-bottom:16px; }
+  .phone-top { display:flex; align-items:center; justify-content:space-between;
+               padding:4px 6px 14px; }
+  .phone-top .l { display:flex; align-items:center; gap:8px; font-size:17px; font-weight:700; }
+  .phone-top .l .dot { width:9px; height:9px; border-radius:50%; background:var(--item); }
+  .phone-top .r { font-size:14px; color:var(--muted); font-weight:500; }
+
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:16px;
+          box-shadow:var(--sh-card); padding:16px; margin-bottom:12px; }
+  .card-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .card-head h3 { font-size:16px; font-weight:700; }
+  .pill { font-size:12px; font-weight:600; color:var(--primary-text);
+          border:1px solid #CFE0F5; border-radius:999px; padding:5px 12px; }
+
+  /* alert — the money shot, in the app's own card language */
+  .alert { border-left:4px solid var(--warning); }
+  .alert h4 { font-size:16px; font-weight:700; margin-bottom:8px; }
+  .alert p { font-size:14.5px; line-height:1.5; color:#46586B; }
+  .alert p b { color:var(--text); font-weight:700; }
+  .alert .seen { margin-top:11px; padding-top:10px; border-top:1px solid var(--border);
+                 font-size:13px; color:var(--muted); }
+  .alert .seen b { color:var(--item); font-weight:600; }
+
+  .rows { display:flex; flex-direction:column; gap:9px; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .row .d { width:9px; height:9px; border-radius:50%; flex:none; }
+  .row .n { font-size:14px; font-weight:600; }
+  .row .m { font-size:12px; color:var(--muted); margin-left:auto; }
+
+  /* ── right column ── */
+  .eyebrow { font-size:19px; font-weight:700; letter-spacing:.14em; color:var(--primary-text);
+             text-transform:uppercase; margin-bottom:20px; }
+  h1 { font-size:74px; line-height:1.03; font-weight:700; letter-spacing:-.025em; }
+  h1 .hl { color:var(--primary-text); }
+  .sub { margin-top:24px; font-size:24px; line-height:1.45; color:#5B6B7C; font-weight:500; max-width:660px; }
+  .meta { margin-top:34px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .tag { font-size:15px; font-weight:600; color:var(--muted);
+         border:1px solid var(--border); background:var(--surface);
+         border-radius:999px; padding:8px 16px; }
+</style>
+</head>
+<body>
+  <div class="brand"><div class="dot"></div><span>Omnistant</span></div>
+
+  <div class="stage">
+    <!-- phone -->
+    <div class="phone">
+      <div class="phone-top">
+        <div class="l"><div class="dot"></div>Omnistant</div>
+        <div class="r">Watching</div>
+      </div>
+
+      <div class="card alert">
+        <h4>You left without something</h4>
+        <p>You headed to <b>work</b> about 2 minutes ago without your <b>AirPods</b>.</p>
+        <div class="seen">Last seen: home, kitchen counter, <b>8:31 AM</b></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>What I remember</h3><div class="pill">Expand</div></div>
+        <div class="rows">
+          <div class="row"><div class="d" style="background:#34A853"></div><div class="n">AirPods</div><div class="m">92%</div></div>
+          <div class="row"><div class="d" style="background:#BD10E0"></div><div class="n">airpods left view</div><div class="m">70%</div></div>
+          <div class="row"><div class="d" style="background:#34A853"></div><div class="n">laptop</div><div class="m">88%</div></div>
+          <div class="row"><div class="d" style="background:#4A90E2"></div><div class="n">home</div><div class="m">95%</div></div>
+          <div class="row"><div class="d" style="background:#34A853"></div><div class="n">backpack</div><div class="m">85%</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- copy -->
+    <div>
+      <div class="eyebrow">The demo</div>
+      <h1>It notices what<br>you forgot —<br><span class="hl">before you're gone.</span></h1>
+      <p class="sub">An agent that watches your things, learns what you carry, and catches you at the door.</p>
+      <div class="meta">
+        <div class="tag">Gemini 3.5 Flash</div>
+        <div class="tag">Google ADK</div>
+        <div class="tag">Cloud Run</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -68,11 +68,27 @@ def main() -> int:
 
     print("service")
     try:
-        health = _call("/healthz")
+        # NOT /healthz: Google's frontend intercepts that path before it
+        # reaches the container and answers its own 404.
+        health = _call("/health")
     except urllib.error.URLError as exc:
         check("service answers", False, str(exc))
         return 1
-    check("service answers", True, f"db={health.get('database')} cache={health.get('cache')}")
+    # `postgres` and `redis`, not `database`/`cache`: those keys have never
+    # existed in /health's response, so this line reported `db=None cache=None`
+    # on a perfectly healthy service and would have said exactly the same thing
+    # on a broken one.
+    status = health.get("status")
+    check(
+        "service answers",
+        status == "ok",
+        f"status={status} postgres={health.get('postgres')} redis={health.get('redis')}",
+    )
+    # Degraded is a real answer, not a failure to answer — the whole design is
+    # that it keeps serving on in-memory fallbacks. Worth stopping for anyway:
+    # everything below writes through those subsystems.
+    if status != "ok":
+        print("    /health reports a degraded subsystem; the checks below may not mean what they say.")
 
     print("\nleave scan -> reminder -> Slack")
     session = str(uuid.uuid4())

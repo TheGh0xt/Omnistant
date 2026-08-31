@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Personal Context Agent",
+    title="Omnistant",
     description="An agent that notices what you have, remembers where it was, and tells you before it matters.",
     version="1.0.0",
     lifespan=lifespan,

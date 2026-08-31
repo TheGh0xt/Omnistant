@@ -15,11 +15,20 @@ Status of the three build-spec workflows: all shipped and live. This is what is
       minute and **20 per day**. Continuous watching exhausts that within
       minutes of real movement, and the demo visibly dies mid-recording. This is
       the single highest-risk item.
-- [ ] **Record the demo** (3–5 min, unedited).
+- [x] **Record the demo** (3–5 min, unedited).
 - [ ] **Rotate the Slack webhook.** The current URL was pasted into a chat
       transcript. A webhook URL *is* the credential — anyone holding it can post
       to the channel.
-- [ ] **Merge the open PR** so `main` is what a judge clones.
+- [x] **Merge the open PR** so `main` is what a judge clones.
+- [ ] **Redeploy at the production cadence.** The recording ran with
+      `DEMO_MODE=1` (30-second nudge delay, per-minute drain). `--set-env-vars`
+      replaces the environment, so a plain `./deployment/deploy.sh` restores it —
+      but only a deploy does, and until one runs the deployed service is not the
+      product the README describes.
+- [ ] **Re-seed the learned routines after the demo.** Evening leave-scans during
+      recording dragged the learned `work` departure to 19:44. That is real
+      learning behaving correctly on unrepresentative input, and it leaves the
+      brief describing a day nobody has.
 
 ---
 
@@ -105,8 +114,11 @@ only.
   then sample evenly) is a first guess, not a studied one.
 - **Redis is opt-in and currently unprovisioned.** Camera frames and watch state
   live in an in-process cache, so they do not survive a cold start or a second
-  instance. Harmless at one instance; `USE_MEMORYSTORE=1` or an external
-  `rediss://` URL when that changes.
+  instance. This is no longer harmless: `--max-instances` is now 4, and
+  `/health` on the deployed service reports `redis: fallback (memory)`, so a
+  leave scan can land on an instance that never saw the frame the watch loop
+  cached. Sessions are unaffected — those are Postgres-backed. Fix is
+  `USE_MEMORYSTORE=1` or an external `rediss://` URL.
 - ~~**No CI.**~~ Shipped: `.github/workflows/tests.yml` runs the suite on every
   push and PR, under both `pytest` and `python -m pytest`, because the suite was
   once uncollectable under one of them while passing under the other. No secrets
@@ -123,11 +135,21 @@ only.
   `DEFAULT_LOCATION_LABEL` sets the resting label ("Home"), which is wrong for
   anyone whose day does not start there.
 - **The wake word is verified by unit test, not on real devices.** The failure
-  counter is pinned by `tests/js/speech.test.js` against a stubbed engine. That
-  cannot tell you how Safari behaves — its continuous recognition is known-flaky,
-  and Firefox has no recognition at all.
+  counter and the suspend/resume wiring are pinned by `tests/js/speech.test.js`
+  and `tests/js/wake_recovery.test.js` against a stubbed engine. That cannot tell
+  you how Safari behaves — its continuous recognition is known-flaky, and Firefox
+  has no recognition at all. The pattern is also deliberately forgiving of
+  mis-transcription, so a false wake is possible; it now costs a returned
+  "listening" state rather than a dead recogniser.
 - **The evening recap has no delivery trigger tied to behaviour** — it is still a
   fixed 21:00, unlike the brief, which now learns.
+- **The brief's two gates have to be kept in agreement by hand.** It fires only
+  inside a window around the learned departure time, *and* only when the
+  scheduler ticks. Nothing in the running service notices when those stop
+  overlapping — a learned time the cron never reaches produces no brief and no
+  error, only "outside the departure window" in the logs. The cron now ticks all
+  day and a test pins the invariant, but the real fix is for the job to own its
+  own schedule rather than splitting it across code and `deploy.sh`.
 
 ---
 

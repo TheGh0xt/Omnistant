@@ -1,4 +1,4 @@
--- Personal Context Agent — event log schema.
+-- Omnistant — event log schema.
 --
 -- Design notes (deviations from the original spec are deliberate and marked):
 --

@@ -24,6 +24,9 @@ demo_data/*.local.json
 # --- Local-only working notes: useful here, not for the public repo ---
 ONE_SHOT_PROMPT.md
 ENGINEERING_LOG.md
+PORTFOLIO_HANDOFF.md
+docs/DEMO_SCRIPT.md
 design_handoff_omnistant_mobile/
 CLAUDE.md
+CLAUDE.MD
 .playwright-mcp/
