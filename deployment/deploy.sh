@@ -66,7 +66,21 @@ if [[ "${DEMO_MODE:-0}" == "1" ]]; then
 else
   NUDGE_DELAY="${NUDGE_DELAY:-2}"
   DRAIN_CRON="${DRAIN_CRON:-*/5 * * * *}"
-  BRIEF_CRON="${BRIEF_CRON:-*/15 5-11 * * *}"
+  # All day, deliberately, despite the job being called the *morning* brief.
+  #
+  # The brief does not fire on a clock — it fires in the run-up to the departure
+  # time this routine has actually been observed at, and refuses outside that
+  # window. Restricting the ticks to 5-11 quietly re-imposed the fixed morning
+  # the design exists to avoid: anyone whose learned departure falls outside
+  # those hours got no brief at all, ever, with nothing in the logs but
+  # "outside the departure window" from ticks that were never going to match.
+  # That is exactly what happened after the demo dragged the learned time to
+  # 19:44 — a window of 19:19-19:59 against a cron that stopped at 11:59.
+  #
+  # Ticking all day costs nothing worth counting: a tick outside the window
+  # returns before any model call or query, and `claim_daily_mark` still caps
+  # delivery at one brief per user per day.
+  BRIEF_CRON="${BRIEF_CRON:-*/15 * * * *}"
   RECAP_NARRATE="${RECAP_NARRATE:-true}"
 fi
 

@@ -306,3 +306,57 @@ def test_the_brief_window_is_unset_until_a_departure_is_learned():
 
     assert _brief_window(None) is None
     assert _brief_window("not a time") is None
+
+
+class TestTheBriefCanReachEveryLearnedDepartureTime:
+    """The morning brief gates itself twice, and both gates have to agree.
+
+    It only fires inside a window around the departure time a routine has
+    actually been observed at — and it only gets the chance to check that window
+    when Cloud Scheduler ticks it. Those are two independent constraints, so a
+    cron restricted to the morning silently voids every learned time outside it.
+
+    That is not hypothetical. After the demo, the live `work` routine's learned
+    departure had drifted to 19:44, giving a window of 19:19-19:59 against a
+    production cron of `*/15 5-11 * * *`. The two never intersected, so the brief
+    could not fire on any day, and the only trace was a log line reading
+    "outside the departure window" from ticks that were never going to match it.
+    """
+
+    @staticmethod
+    def _production_brief_cron() -> str:
+        """The BRIEF_CRON default from deploy.sh's non-demo branch."""
+        import re
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[1] / "deployment" / "deploy.sh"
+        defaults = re.findall(r'BRIEF_CRON="\$\{BRIEF_CRON:-([^}]*)\}"', script.read_text())
+        assert len(defaults) == 2, f"expected a demo and a production default, got {defaults}"
+        return defaults[1]          # demo branch first, production second
+
+    def test_the_production_cron_ticks_at_every_hour(self):
+        cron = self._production_brief_cron()
+        hour_field = cron.split()[1]
+        assert hour_field == "*", (
+            f"production BRIEF_CRON is {cron!r}, which only ticks during hours {hour_field}. "
+            "A learned departure outside those hours can never be briefed on."
+        )
+
+    @pytest.mark.parametrize("departs", ["06:30", "08:45", "11:00", "16:59", "19:44", "23:10"])
+    def test_a_window_is_reachable_wherever_the_departure_time_lands(self, departs):
+        """Every window the app can compute must contain a tick the cron fires."""
+        import main as main_module
+
+        window = main_module._brief_window(departs)
+        assert window is not None
+        opens, closes = window
+
+        cron = self._production_brief_cron()
+        step = int(cron.split()[0].removeprefix("*/"))
+        ticks = {h * 60 + m for h in range(24) for m in range(0, 60, step)}
+
+        assert any(opens <= t <= closes for t in ticks), (
+            f"a departure at {departs} yields a window of "
+            f"{opens // 60:02d}:{opens % 60:02d}-{closes // 60:02d}:{closes % 60:02d}, "
+            f"which cron {cron!r} never ticks inside."
+        )
