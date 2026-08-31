@@ -63,8 +63,17 @@
       return this.isSupported() && (global.speechSynthesis.speaking || global.speechSynthesis.pending);
     },
 
-    speak: function (text) {
-      if (!this.isSupported() || !text) { return; }
+    /* `onDone` fires when the utterance finishes, errors, or cannot be spoken
+       at all. Callers use it to reopen the microphone at the moment the page
+       stops talking; a fixed timeout either reopens too early — and the agent
+       hears itself — or leaves the mic shut longer than it needs to be. It is
+       called exactly once, on every exit path. */
+    speak: function (text, onDone) {
+      var done = typeof onDone === 'function' ? onDone : function () {};
+      var fired = false;
+      function finish() { if (!fired) { fired = true; done(); } }
+
+      if (!this.isSupported() || !text) { finish(); return; }
       // Cancelling when nothing is speaking is not free on iOS: cancel()
       // immediately followed by speak() in the same tick can swallow the
       // utterance outright. Only clear the queue when there is one.
@@ -74,6 +83,7 @@
       u.pitch = 1.0;
       u.lang = global.navigator.language || 'en-US';
       var self = this;
+      u.onend = finish;
       u.onerror = function (event) {
         // "not-allowed" here means the unlock never happened. Say so once,
         // rather than leaving a silent agent that looks like it ignored you.
@@ -81,8 +91,13 @@
           self._warned = true;
           if (global.console) { global.console.warn('[speech] blocked — needs a user gesture first'); }
         }
+        finish();
       };
-      global.speechSynthesis.speak(u);
+      try {
+        global.speechSynthesis.speak(u);
+      } catch (err) {
+        finish();   // the utterance never started; the caller still needs its turn back
+      }
     },
 
     /* True once synthesis has been unlocked inside a user gesture. iOS refuses
@@ -431,9 +446,15 @@
    * the same sound. Matching an exact string means the wake word simply does not
    * work, which is what happened. Match a greeting followed by anything that
    * sounds like it instead, and accept the full product name on its own because
-   * it is distinctive enough not to fire by accident. */
+   * it is distinctive enough not to fire by accident.
+   *
+   * Two alternatives were dropped after they proved too eager: `on\s?me` and
+   * `almighty` both match ordinary English behind a greeting — "hey, on me" and
+   * "ok, almighty" are things people say — and a false wake that is followed by
+   * no command is the exact sequence that used to strand the recogniser. The
+   * remaining spellings are all mis-transcriptions of "Omni" and are not words. */
   WakeWord.DEFAULT_PATTERN =
-    /\b(?:hey|hi|hello|ok|okay|yo)\s+(?:omni\w*|omn\w+|omany|ohmni|amani|on\s?me|almighty)\b|\bomnistant\b/;
+    /\b(?:hey|hi|hello|ok|okay|yo)\s+(?:omni\w*|omn\w+|omany|ohmni|amani)\b|\bomnistant\b/;
 
   WakeWord.prototype.isSupported = function () { return !!Recognition; };
 

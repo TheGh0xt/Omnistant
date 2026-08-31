@@ -53,6 +53,19 @@
 
   var RESTING_HINT = 'Tap to talk, or just type below.';
 
+  /* `send()` is called fire-and-forget from three places and handles its own
+   * errors internally, so this should never fire. It exists because the failure
+   * mode when it did was invisible — an unhandled rejection in the console and
+   * an app that had quietly stopped responding — and a stuck turn is worth
+   * clearing even when the cause is a surprise. */
+  function reportSendFailure(err) {
+    console.warn('send failed unexpectedly', err);
+    state.busy = false;
+    els.sendBtn.disabled = false;
+    setVoice('idle', 'Voice', RESTING_HINT);
+    resumeWake();
+  }
+
   /* ───────── api ───────── */
   async function api(path, options) {
     var res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options));
@@ -197,7 +210,11 @@
   els.watchToggle.addEventListener('click', function () {
     if (state.watching) { stopWatching(); } else { startWatching(); }
   });
-  els.flipCamera.addEventListener('click', function () { camera.flip(); });
+  els.flipCamera.addEventListener('click', function () {
+    // `flip()` is async; without this a device with no second camera rejects
+    // into nothing and the button looks simply dead.
+    camera.flip().catch(function (err) { say((err && err.message) || 'Could not switch camera.'); });
+  });
 
   async function startWatching() {
     els.watchToggle.disabled = true;
@@ -315,7 +332,14 @@
     // every few seconds is precisely the nagging this is meant to replace.
     if (result.narration) {
       say(result.narration, { transient: true });
-      if (Speaker.isSupported()) { Speaker.speak(result.narration); }
+      if (Speaker.isSupported()) {
+        // Watch and the wake word are both top-level toggles, so having both on
+        // is ordinary. The chat turn has always closed the mic before speaking;
+        // this path never did, so the agent could narrate a scene into its own
+        // open microphone and wake itself on the narration.
+        if (state.wake) { wake.suspend(); }
+        Speaker.speak(result.narration, function () { resumeWake(200); });
+      }
     }
     if (result.logged) { refreshObservations(); }
   }
@@ -427,6 +451,26 @@
     }, { once: false, passive: true });
   });
 
+  /* Standby is suspended from four places — a wake match, a chat turn, a mic
+   * tap, and the watch loop narrating — and it has to come back from all of
+   * them. It used to come back from exactly one: the `finally` of `send()`. Any
+   * triggered listen that ended without producing a transcript — silence after
+   * the wake word, a mic error, a listener that declined to start — left the
+   * recogniser suspended for good while the pill still read "always listening",
+   * which is what "it wakes up once and then stops working" was.
+   *
+   * Routing every resume through here makes the safe thing the default: the
+   * delay lets speech synthesis finish so the agent does not hear itself, and
+   * the guards mean a resume can never fight a turn that is still running or
+   * reopen a microphone the user has switched off. */
+  function resumeWake(delayMs) {
+    if (!state.wake) { return; }              // switched off; leave it off
+    clearTimeout(state.wakeResumeTimer);
+    state.wakeResumeTimer = setTimeout(function () {
+      if (state.wake && !state.busy) { wake.resume(); }
+    }, delayMs === undefined ? 600 : delayMs);
+  }
+
   /* ───────── wake word ───────── */
   var wake = new WakeWord({
     // Show what the recogniser actually heard while in standby. Without this,
@@ -450,7 +494,15 @@
       // The trigger stream is tuned for two words; hand the floor to the real
       // recogniser for the actual command.
       setAgentStatus('Listening');
-      if (state.listener) { state.listener.start(); }
+      // `start()` refuses if a push-to-talk turn is already in flight, and the
+      // wake word has already suspended itself by this point. Without this the
+      // floor is handed to nobody and standby never comes back. It is `async`,
+      // so the refusal arrives as a resolved `false`, never as a falsy return.
+      if (!state.listener) { resumeWake(0); return; }
+      Promise.resolve(state.listener.start()).then(
+        function (started) { if (!started) { resumeWake(0); } },
+        function () { resumeWake(0); }
+      );
     },
     onStateChange: function (standby) {
       els.micHalo.classList.toggle('standby', standby && !state.busy);
@@ -496,7 +548,7 @@
   els.composer.addEventListener('submit', function (e) {
     e.preventDefault();
     Speaker.unlock();
-    send(els.input.value);
+    send(els.input.value).catch(reportSendFailure);
   });
 
   document.querySelectorAll('.quick-btn').forEach(function (btn) {
@@ -517,31 +569,40 @@
       els.workflowTitle.textContent = titles[btn.dataset.action][0];
       els.workflowSub.textContent = titles[btn.dataset.action][1];
       if (btn.dataset.action === 'timeline') { showTimeline(); } else { els.timelineCard.hidden = true; }
-      send(phrases[btn.dataset.action]);
+      send(phrases[btn.dataset.action]).catch(reportSendFailure);
     });
   });
 
   async function send(text) {
     text = (text || '').trim();
     if (!text || state.busy) { return; }
+    // Nothing between here and the `try` may throw: `state.busy` is now set, and
+    // only the `finally` clears it. Everything that could fail belongs inside.
     state.busy = true;
-    wake.suspend();          // don't let it hear its own reply and wake itself
-    els.sendBtn.disabled = true;
-    els.input.value = '';
-    setAgentStatus('Thinking');
-    setVoice('busy', 'Thinking…', '“' + text + '”');
-
-    var payload = { text: text, session_id: state.sessionId, user_id: state.userId };
-    // If the camera is open, the current view is part of the question.
-    //
-    // Waited for rather than sampled: `isRunning()` is false for the second or
-    // two between the camera starting and the video becoming decodable, and
-    // "I'm heading out" lands inside that gap constantly — you tap start and
-    // speak. A scan with no frame cannot see, so it queues no reminder, and the
-    // notification simply never arrives.
-    if (camera.hasStream()) { payload.frame = await camera.captureWhenReady(2500); }
 
     try {
+      wake.suspend();        // don't let it hear its own reply and wake itself
+      els.sendBtn.disabled = true;
+      els.input.value = '';
+      setAgentStatus('Thinking');
+      setVoice('busy', 'Thinking…', '“' + text + '”');
+
+      var payload = { text: text, session_id: state.sessionId, user_id: state.userId };
+
+      // If the camera is open, the current view is part of the question.
+      //
+      // Waited for rather than sampled: `isRunning()` is false for the second or
+      // two between the camera starting and the video becoming decodable, and
+      // "I'm heading out" lands inside that gap constantly — you tap start and
+      // speak. A scan with no frame cannot see, so it queues no reminder, and the
+      // notification simply never arrives.
+      //
+      // Inside the `try`, and load-bearing there: this await used to sit above
+      // it, so a rejected capture skipped the `finally`, left `state.busy` set
+      // for the lifetime of the page, and silently turned every later send into
+      // a no-op — the whole app, not just the camera.
+      if (camera.hasStream()) { payload.frame = await camera.captureWhenReady(2500); }
+
       var reply = await api('/api/chat', { method: 'POST', body: JSON.stringify(payload) });
       state.sessionId = reply.session_id || state.sessionId;
       say(reply.reply || 'I don’t have an answer for that.', { rows: detailRowsFor(reply) });
@@ -549,16 +610,18 @@
       highlightAnswer(reply);
       await refreshObservations();
     } catch (err) {
-      say(err.status === 429
+      // This now also catches camera and DOM failures, not just API errors, so
+      // it cannot assume the shape of what it caught.
+      say(err && err.status === 429
         ? 'I’m rate-limited right now. Try again in about ' + Math.round(err.retryAfter || 30) + ' seconds.'
-        : err.message);
+        : ((err && err.message) || 'Something went wrong. Try that again.'));
     } finally {
       state.busy = false;
       els.sendBtn.disabled = false;
       setAgentStatus(state.wake ? 'Standing by' : (state.watching ? 'Watching' : 'Ready'));
       setVoice('idle', 'Voice', RESTING_HINT);
       // Give speech synthesis time to finish before opening the mic again.
-      setTimeout(function () { wake.resume(); }, 1200);
+      resumeWake(1200);
     }
   }
 
@@ -672,12 +735,18 @@
   function setupVoice() {
     var listener = new Listener({
       onPartial: function (t) { setVoice('listening', 'Listening — tap to stop', t); },
-      onResult: function (t) { send(t); },
+      onResult: function (t) { send(t).catch(reportSendFailure); },
       onStateChange: function (listening) {
         if (listening) { setVoice('listening', 'Listening — tap to stop', 'Go ahead…'); setAgentStatus('Listening'); }
-        else if (!state.busy) { setVoice('idle', 'Voice', RESTING_HINT); setAgentStatus(state.watching ? 'Watching' : 'Ready'); }
+        else if (!state.busy) {
+          setVoice('idle', 'Voice', RESTING_HINT); setAgentStatus(state.watching ? 'Watching' : 'Ready');
+          // The listen is over and no transcript is coming — if one were,
+          // `send()` would have set `state.busy` and would own the resume.
+          // This is the path a silent wake used to die on.
+          resumeWake();
+        }
       },
-      onError: function (message) { setVoice('idle', 'Voice', RESTING_HINT); say(message); }
+      onError: function (message) { setVoice('idle', 'Voice', RESTING_HINT); say(message); resumeWake(); }
     });
     if (!listener.isSupported()) {
       els.micBtn.disabled = true;
